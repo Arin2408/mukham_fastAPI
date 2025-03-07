@@ -97,7 +97,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'mukham.wsgi.application'
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # Or your frontend's domain
+    "http://localhost:3000",  
 ]
 CSRF_TRUSTED_ORIGINS = ['http://localhost:3000']
 

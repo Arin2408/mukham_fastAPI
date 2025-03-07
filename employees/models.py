@@ -28,3 +28,32 @@ class Customuser(models.Model):
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} ({self.mobile_number})"
+    
+class Attendance(models.Model):
+    STATUS_CHOICES = [
+        ('Early', 'Early'),
+        ('On Time', 'On Time'),
+        ('Late', 'Late'),
+    ]
+
+    employee = models.ForeignKey(Customuser, on_delete=models.CASCADE)
+    check_in = models.DateTimeField()
+    check_out = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    hours_worked = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-check_in']
+
+    def save(self, *args, **kwargs):
+        if self.check_out and not self.hours_worked:
+            self.calculate_hours()
+        super().save(*args, **kwargs)
+
+    def calculate_hours(self):
+        if self.check_out:
+            delta = self.check_out - self.check_in
+            self.hours_worked = round(delta.total_seconds() / 3600, 2)
+
+    def __str__(self):
+        return f"{self.employee} - {self.check_in.date()}"
