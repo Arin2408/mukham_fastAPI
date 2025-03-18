@@ -74,7 +74,6 @@ def profile_view(request, org_id):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-# Organisation API (GET/POST) with authentication
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])

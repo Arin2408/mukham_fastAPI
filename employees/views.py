@@ -6,8 +6,9 @@ from django.utils import timezone
 import datetime
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Customuser, Attendance
-from .serializers import Signupserializer, Loginserializer, EmployeeDetailSerializer, AttendanceSerializer
+from .serializers import Signupserializer, Loginserializer, UserSerializer, AttendanceSerializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.exceptions import PermissionDenied, NotFound
 
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
@@ -57,13 +58,13 @@ def login_view(request):
                     refresh['employee_id'] = employee_id
         
                 return Response({
-                    "access_token": str(refresh.access_token),
-                    "refresh_token": str(refresh),
-                    "org_id": org_id,
-                    "role": role,
-                    "employee_id": employee_id 
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh),
+                    'org_id': org_id,
+                    'role': role,
+                    'employee_id': employee_id 
                 }, status=status.HTTP_200_OK)
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Login Error"}, status=status.HTTP_404_NOT_FOUND)
         except Customuser.DoesNotExist:
             return Response({"error": "Invalid mobile number or password"}, status=status.HTTP_400_BAD_REQUEST)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -152,15 +153,25 @@ def calculate_attendance_status(shift, check_in_time):
         return 'Late'
     return 'On Time'
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@api_view(['GET', 'PUT'])
 @authentication_classes([JWTAuthentication])
-def employee_details(request):
-    """Get employee details with associated shift information"""
-    serializer = EmployeeDetailSerializer(request.user, context={
-        'request': request
-    })
-    return Response(serializer.data)
+@permission_classes([IsAuthenticated])
+def employee_details(request, pk):
+    try:
+        # Get the user instance
+        user = Customuser.objects.get(pk=pk)
+    except Customuser.DoesNotExist:
+        raise NotFound("User not found")
+
+    # Verify requesting user matches the target user
+    if user != request.user:
+        raise PermissionDenied("You are not authorized to view this user's information")
+
+    # Serialize the data
+    serializer = UserSerializer(user)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])

@@ -41,14 +41,38 @@ class EmployeeDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Customuser
         fields = [
-            'id', 'first_name', 'last_name', 'email', 'mobile_number',
+            'first_name', 'last_name', 'email',
             'department', 'designation', 'shift', 'office_location',
             'attendance_history'
         ]
+        read_only_fields = ['id', 'mobile_number']
 
     def get_attendance_history(self, obj):
         attendances = Attendance.objects.filter(employee=obj).order_by('-check_in')[:30]
         return AttendanceSerializer(attendances, many=True).data
+
+class UserSerializer(serializers.ModelSerializer):
+    department = serializers.StringRelatedField()
+    designation = serializers.StringRelatedField()
+    shift = serializers.StringRelatedField()
+    office_location = serializers.StringRelatedField()
+    organisation = serializers.StringRelatedField()
+
+    class Meta:
+        model = Customuser
+        fields = [
+            'id',
+            'mobile_number',
+            'first_name',
+            'last_name',
+            'email',
+            'department',
+            'designation',
+            'shift',
+            'office_location',
+            'organisation'
+        ]
+        read_only_fields = ['mobile_number', 'email']
 
 class Signupserializer(serializers.ModelSerializer):
     class Meta:
