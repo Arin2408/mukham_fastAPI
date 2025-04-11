@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import CustomUser
+from employees.models import Customuser
 from .serializers import CustomUserSerializer, ProfileSerializer, Loginserializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
@@ -39,15 +40,15 @@ def login_view(request):
             # Directly compare the raw password
             if user.password == serializer.validated_data['password']:
                 refresh = RefreshToken.for_user(user)
-                role = 'organization' if user.org_id == user.pk else 'employee'
-                
+                access_token = refresh.access_token
+                access_token['role'] = 'organization' if user.is_organization else 'employee'
+                access_token['org_id'] = user.org_id 
                 # Add role to token claims
-                refresh['role'] = role
                 return Response({
                     'access': str(refresh.access_token),
                     'refresh': str(refresh),
                     'org_id': user.org_id,
-                    'role': role
+                    'role': 'organization' if user.is_organization else 'employee'
                 })
             return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
         except CustomUser.DoesNotExist:

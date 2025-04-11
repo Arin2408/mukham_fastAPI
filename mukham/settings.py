@@ -176,3 +176,7 @@ SIMPLE_JWT = {
 
 
 AUTH_USER_MODEL = 'organisation.CustomUser'
+# AUTHENTICATION_BACKENDS = [
+#     'employees.auth_backends.EmployeeAuthBackend',
+#     'django.contrib.auth.backends.ModelBackend',
+# ]

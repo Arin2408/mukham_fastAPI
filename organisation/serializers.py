@@ -1,10 +1,11 @@
 from rest_framework import serializers
 from .models import CustomUser
+from django.contrib.auth import authenticate
 
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ['name', 'email', 'details', 'mobile_number']
+        fields = ['name', 'email', 'details', 'mobile_number', 'is_organization']
         extra_kwargs = {
             'name': {'required': True},
             'mobile_number': {'required': True},

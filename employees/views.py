@@ -6,7 +6,7 @@ from django.utils import timezone
 import datetime
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Customuser, Attendance
-from .serializers import Signupserializer, Loginserializer, UserSerializer, AttendanceSerializer
+from .serializers import OrganizationProfileSerializer, Signupserializer, Loginemployeeserializer, UserProfileSerializer, UserSerializer, AttendanceSerializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.exceptions import PermissionDenied, NotFound
 
@@ -17,56 +17,58 @@ def signup_view(request):
     request.data['org'] = request.user.org_id
     serializer = Signupserializer(data=request.data)
     if serializer.is_valid():
-        serializer.save()
-        return Response({"message": "User registered successfully!"}, status=status.HTTP_201_CREATED)
+        employee = serializer.save()
+        return Response({
+            'message': 'Employee created successfully',
+            'password': employee.temporary_password,
+            'employee': UserProfileSerializer(employee).data
+        }, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def list_users(request):
-    users = Customuser.objects.filter(organisation=request.user.org_id)
-    serializer = Signupserializer(users, many=True)
-    return Response(serializer.data)
+    user = request.user
+    if user.is_organization:
+        serializer = OrganizationProfileSerializer(user)
+    else:
+        if not hasattr(user, 'employee'):
+            return Response(
+                {'error': 'Employee profile not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        serializer = UserProfileSerializer(user.employee)
+    
+    return Response({
+        'user_type': user.user_type,
+        'user_id': user.user_id,
+        'profile': serializer.data
+    })
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
-def login_view(request):
-    serializer = Loginserializer(data=request.data)
+def login_view_employee(request):
+    serializer = Loginemployeeserializer(data=request.data)
     if serializer.is_valid():
-        try:
-            user = Customuser.objects.get(
-                mobile_number=serializer.validated_data['mobile_number']
-            )
-    
-            if user.password == serializer.validated_data['password']:
-
-                refresh = RefreshToken.for_user(user)
-                if hasattr(user, 'org_id'):  # Check if org_id exists (organisation)
-                    role = 'organization'
-                    org_id = user.org_id  # Use org_id as primary key for organisations
-                    employee_id = None
-                else:
-                    role = 'employee'
-                    org_id = user.organisation.org_id  # Use organisation's org_id
-                    employee_id = user.id  # Use id as primary key for employees
-                
-                # Add claims to token
-                refresh['role'] = role
-                refresh['org_id'] = org_id
-                if employee_id:
-                    refresh['employee_id'] = employee_id
+        data = serializer.validated_data
+        user = data['user']
         
-                return Response({
-                    'access': str(refresh.access_token),
-                    'refresh': str(refresh),
-                    'org_id': org_id,
-                    'role': role,
-                    'employee_id': employee_id 
-                }, status=status.HTTP_200_OK)
-            return Response({"error": "Login Error"}, status=status.HTTP_404_NOT_FOUND)
-        except Customuser.DoesNotExist:
-            return Response({"error": "Invalid mobile number or password"}, status=status.HTTP_400_BAD_REQUEST)
+        if user.is_organization:
+            profile_data = OrganizationProfileSerializer(user).data
+        else:
+            profile_data = UserProfileSerializer(user.employee).data
+        
+        return Response({
+            'message': 'Login successful',
+            'access_token': data['access'],
+            'refresh_token': data['refresh'],
+            'user_type': user.user_type,
+            'user_id': user.user_id,
+            'org_id': data['org_id'],  # Include org_id
+            'user_role': data['user_role'],  # Include user_role
+            'profile': profile_data
+        })
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['PUT'])
@@ -153,24 +155,28 @@ def calculate_attendance_status(shift, check_in_time):
         return 'Late'
     return 'On Time'
 
-@api_view(['GET', 'PUT'])
+@api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
-def employee_details(request, pk):
-    try:
-        # Get the user instance
-        user = Customuser.objects.get(pk=pk)
-    except Customuser.DoesNotExist:
-        raise NotFound("User not found")
-
-    # Verify requesting user matches the target user
-    if user != request.user:
-        raise PermissionDenied("You are not authorized to view this user's information")
-
-    # Serialize the data
-    serializer = UserSerializer(user)
-    return Response(serializer.data, status=status.HTTP_200_OK)
-
+def employee_details(request):
+    user = request.user
+    if user.is_organization:
+        serializer = OrganizationProfileSerializer(user)
+    else:
+        try:
+            employee_profile = user.employee  # Will raise AttributeError if no employee profile
+            serializer = UserProfileSerializer(employee_profile)
+        except AttributeError:
+            return Response(
+                {'error': 'Employee profile not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    return Response({
+        'user_type': user.user_type,
+        'user_id': user.org_id,  # Changed to use org_id
+        'profile': serializer.data
+    })
 
 
 @api_view(['GET'])
