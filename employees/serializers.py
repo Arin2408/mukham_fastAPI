@@ -28,12 +28,6 @@ class LocationSerializer(serializers.ModelSerializer):
         model = Location
         fields = ['location_id', 'location_name']
 
-class AttendanceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Attendance
-        fields = ['id', 'check_in', 'check_out', 'status', 'hours_worked']
-        read_only_fields = ['status', 'hours_worked']
-
 class EmployeeDetailSerializer(serializers.ModelSerializer):
     department = DepartmentSerializer()
     designation = DesignationSerializer()
@@ -192,3 +186,42 @@ class OrganizationProfileSerializer(serializers.ModelSerializer):
     
     def get_user_id(self, obj):
         return obj.org_id
+    
+class AttendanceSerializer(serializers.ModelSerializer):
+    employee_name = serializers.SerializerMethodField()
+    employee_id = serializers.IntegerField(source='employee.user.org_id', read_only=True)
+    
+    class Meta:
+        model = Attendance
+        fields = [
+            'id',
+            'employee',
+            'employee_id',
+            'employee_name',
+            'check_in',
+            'check_out',
+            'status',
+            'hours_worked'
+        ]
+        read_only_fields = ['status', 'hours_worked']
+    
+    def get_employee_name(self, obj):
+        return f"{obj.employee.first_name} {obj.employee.last_name}"
+
+class CustomuserSerializer(serializers.ModelSerializer):
+    attendances = AttendanceSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Customuser
+        fields = [
+            'user',
+            'first_name',
+            'last_name',
+            'department',
+            'designation',
+            'shift',
+            'office_location',
+            'organisation',
+            'attendances'
+        ]
+        depth = 1  # Shows nested relationships

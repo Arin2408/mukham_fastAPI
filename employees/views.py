@@ -98,63 +98,6 @@ def delete_user(request, user_id):
     user.delete()
     return Response({"message": "User deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
 
-@api_view(['POST'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def mark_attendance(request):
-    user = request.user
-    active_attendance = Attendance.objects.filter(
-        employee=user, 
-        check_out__isnull=True
-    ).first()
-
-    if active_attendance:
-        # Handle check-out
-        active_attendance.check_out = timezone.now()
-        active_attendance.save()
-        return Response(
-            AttendanceSerializer(active_attendance).data,
-            status=status.HTTP_200_OK
-        )
-
-    # Validate shift assignment
-    if not user.shift:
-        return Response(
-            {"error": "No shift assigned to employee"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    # Create new attendance record with shift
-    check_in_time = timezone.now()
-    status = calculate_attendance_status(user.shift, check_in_time)
-    
-    attendance = Attendance.objects.create(
-        employee=user,
-        shift=user.shift,  # Directly use employee's assigned shift
-        check_in=check_in_time,
-        status=status
-    )
-
-    return Response(
-        AttendanceSerializer(attendance).data,
-        status=status.HTTP_201_CREATED
-    )
-
-def calculate_attendance_status(shift, check_in_time):
-    """Calculate status based on shift timings"""
-    shift_start = check_in_time.replace(
-        hour=shift.shift_start_time.hour,
-        minute=shift.shift_start_time.minute,
-        second=0,
-        microsecond=0
-    )
-    
-    if check_in_time < shift_start:
-        return 'Early'
-    elif check_in_time > shift_start:
-        return 'Late'
-    return 'On Time'
-
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -164,7 +107,7 @@ def employee_details(request):
         serializer = OrganizationProfileSerializer(user)
     else:
         try:
-            employee_profile = user.employee  # Will raise AttributeError if no employee profile
+            employee_profile = user.employee  
             serializer = UserProfileSerializer(employee_profile)
         except AttributeError:
             return Response(
@@ -174,16 +117,85 @@ def employee_details(request):
     
     return Response({
         'user_type': user.user_type,
-        'user_id': user.org_id,  # Changed to use org_id
+        'user_id': user.org_id,  
         'profile': serializer.data
     })
 
 
+def calculate_attendance_status(employee):
+    """Helper function to calculate attendance status"""
+    if not employee.shift:
+        return 'On Time'  # Default if no shift assigned
+    
+    now = timezone.now()
+    shift_start = now.replace(
+        hour=employee.shift.shift_start_time.hour,
+        minute=employee.shift.shift_start_time.minute,
+        second=0,
+        microsecond=0
+    )
+    
+    if now < shift_start - datetime.timedelta(minutes=15):
+        return 'Early'
+    elif now > shift_start + datetime.timedelta(minutes=15):
+        return 'Late'
+    return 'On Time'
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def mark_attendance(request):
+    try:
+        employee_profile = request.user.employee
+    except AttributeError:
+        return Response(
+            {'error': 'Employee profile not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Check for existing open attendance
+    active_attendance = Attendance.objects.filter(
+        employee=employee_profile,
+        check_out__isnull=True
+    ).first()
+    
+    if active_attendance:
+        # Handle check-out
+        active_attendance.check_out = timezone.now()
+        active_attendance.save()
+        serializer = AttendanceSerializer(active_attendance)
+        return Response(serializer.data)
+    
+    # Handle check-in
+    attendance = Attendance.objects.create(
+        employee=employee_profile,
+        check_in=timezone.now(),
+        status=calculate_attendance_status(employee_profile)  # Fixed: Using standalone function
+    )
+    
+    serializer = AttendanceSerializer(attendance)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
-def attendance_history(request):
-    """Get authenticated employee's attendance history"""
-    attendances = Attendance.objects.filter(employee=request.user).select_related('shift')
+def employee_attendance(request, employee_id=None):
+    if request.user.is_organization:
+        # Organization viewing employee attendance
+        if employee_id:
+            attendances = Attendance.objects.filter(
+                employee__id=employee_id,
+                employee__organisation=request.user
+            )
+        else:
+            attendances = Attendance.objects.filter(
+                employee__organisation=request.user
+            )
+    else:
+        # Employee viewing their own attendance
+        attendances = Attendance.objects.filter(
+            employee=request.user.employee
+        )
+    
     serializer = AttendanceSerializer(attendances, many=True)
     return Response(serializer.data)
