@@ -6,43 +6,77 @@ from django.utils import timezone
 import datetime
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Customuser, Attendance
-from .serializers import OrganizationProfileSerializer, Signupserializer, Loginemployeeserializer, UserProfileSerializer, UserSerializer, AttendanceSerializer
+from .serializers import OrganizationProfileSerializer, Signupserializer, Loginemployeeserializer, UserProfileSerializer, UserSerializer, AttendanceSerializer, EmployeeListSerializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.exceptions import PermissionDenied, NotFound
+import traceback
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+
+import traceback
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
 
 @api_view(['POST'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def signup_view(request):
-    request.data['org'] = request.user.org_id
+    print("🔥 Signup API HIT")
+    print("📦 Data:", request.data)
+
     serializer = Signupserializer(data=request.data)
-    if serializer.is_valid():
+
+    # ✅ FIRST check validation
+    if not serializer.is_valid():
+        print("❌ VALIDATION ERROR:", serializer.errors)
+        return Response(serializer.errors, status=400)
+
+    # ✅ THEN try saving
+    try:
         employee = serializer.save()
         return Response({
-            'message': 'Employee created successfully',
-            'password': employee.temporary_password,
-            'employee': UserProfileSerializer(employee).data
-        }, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            "message": "Employee created successfully",
+            "password": getattr(employee, "temporary_password", None),
+        }, status=201)
+
+    except Exception as e:
+        print("💥 SAVE ERROR:", str(e))
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=500)
+
+
 
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def list_users(request):
-    user = request.user
-    if user.is_organization:
-        serializer = OrganizationProfileSerializer(user)
-    else:
-        if not hasattr(user, 'employee'):
-            return Response(
-                {'error': 'Employee profile not found'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-        serializer = UserProfileSerializer(user.employee)
+    org_id = request.query_params.get('org_id')
     
+    # Handle cases where org_id might be 'undefined' or 'null' literals from frontend
+    if org_id in [None, '', 'undefined', 'null']:
+        org_id = getattr(request.user, 'org_id', None)
+
+    # If the requester is an organization or they are requesting a list for an org
+    if (request.user.is_organization or org_id) and org_id not in [None, '', 'undefined', 'null']:
+        try:
+            employees = Customuser.objects.filter(organisation_id=org_id)
+            serializer = EmployeeListSerializer(employees, many=True)
+            return Response(serializer.data)
+        except (ValueError, TypeError):
+            return Response([], status=status.HTTP_200_OK) # Return empty list on invalid ID
+    
+    # Fallback for individual user profile if needed
+    if not hasattr(request.user, 'employee'):
+        return Response(
+            {'error': 'Employee profile not found'}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    serializer = UserProfileSerializer(request.user.employee)
     return Response({
-        'user_type': user.user_type,
-        'user_id': user.user_id,
+        'user_type': request.user.user_type,
+        'user_id': request.user.user_id,
         'profile': serializer.data
     })
 

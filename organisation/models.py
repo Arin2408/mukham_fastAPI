@@ -20,7 +20,13 @@ class CustomUserManager(BaseUserManager):
             email=email,
             **extra_fields
         )
-        user.password = password  # Storing plain text temporarily
+        if password:
+            user.set_password(password)
+        else:
+            generated_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+            user.set_password(generated_password)
+            user.temporary_password = generated_password
+            
         user.save(using=self._db)
         return user
 
@@ -41,7 +47,6 @@ class CustomUser(AbstractUser):
     details = models.TextField(blank=True, null=True)
     mobile_number = models.CharField(max_length=15, unique=True)
     is_organization = models.BooleanField(default=True)
-    password = models.CharField(max_length=255)  # Plain text temporarily
     
     USERNAME_FIELD = 'mobile_number'
     REQUIRED_FIELDS = ['name', 'email']

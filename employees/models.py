@@ -39,8 +39,6 @@ class Attendance(models.Model):
     employee = models.ForeignKey(
         Customuser,
         on_delete=models.CASCADE,
-        db_column='user_id',  
-        to_field='user_id',
         related_name='attendances'
     )
     check_in = models.DateTimeField()

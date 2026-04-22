@@ -9,7 +9,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'name': {'required': True},
             'mobile_number': {'required': True},
-            'email': {'required': False},
+            'email': {'required': False},  # Email is now optional
             'details': {'required': False}
         }
 

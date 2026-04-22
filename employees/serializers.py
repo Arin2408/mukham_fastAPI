@@ -6,8 +6,18 @@ from departments.models import Department
 from designations.models import Designation
 from shifts.models import Shift
 from locations.models import Location
-from organisation.models import CustomUser
+from organisation.models import CustomUser as OrgUser
 from rest_framework_simplejwt.tokens import RefreshToken
+
+def mobile_number_variants(mobile_number):
+    normalized = ''.join(filter(str.isdigit, str(mobile_number)))
+    variants = [normalized]
+    if normalized.startswith('91') and len(normalized) > 10:
+        variants.append(normalized[2:])
+    elif len(normalized) == 10:
+        variants.append(f'91{normalized}')
+    return list(dict.fromkeys(variants))
+
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
@@ -76,12 +86,12 @@ class Signupserializer(serializers.ModelSerializer):
     email = serializers.EmailField(write_only=True, required=True)
     first_name = serializers.CharField(required=True)
     last_name = serializers.CharField(required=True)
-    organisation_id = serializers.IntegerField(write_only=True, required=True)
+    org_id = serializers.IntegerField(write_only=True, required=True)
     class Meta:
         model = Customuser
         fields = [
             'mobile_number', 'email', 'first_name', 'last_name',
-            'department', 'designation', 'shift', 'office_location', 'organisation', 'organisation_id'
+            'department', 'designation', 'shift', 'office_location', 'organisation', 'org_id'
         ]
         extra_kwargs = {
             'organisation': {'required': False}
@@ -93,9 +103,19 @@ class Signupserializer(serializers.ModelSerializer):
         email = validated_data.pop('email')
         first_name = validated_data.pop('first_name')
         last_name = validated_data.pop('last_name')
+        org_id = validated_data.pop('org_id', None)
+
+        from organisation.models import CustomUser as OrgUser
+        
+        # Ensure 'organisation' is set from org_id if not already present
+        if not validated_data.get('organisation') and org_id:
+            try:
+                validated_data['organisation'] = CustomUser.objects.get(org_id=org_id)
+            except OrgUser.DoesNotExist:
+                raise serializers.ValidationError({"org_id": "Invalid organization ID"})
         
         # Create user (password auto-generated in manager)
-        user = CustomUser.objects.create_user(
+        user = OrgUser.objects.create_user(
             mobile_number=mobile_number,
             email=email,
             name=f"{first_name} {last_name}",
@@ -110,8 +130,8 @@ class Signupserializer(serializers.ModelSerializer):
             **validated_data
         )
         
-        # Add password to response data
-        employee.temporary_password = user.password
+        # Add password to response data - GET the generated plain text password from the user object
+        employee.temporary_password = getattr(user, 'temporary_password', None)
         return employee
 
     def to_representation(self, instance):
@@ -123,28 +143,38 @@ class Loginemployeeserializer(serializers.ModelSerializer):
     password = serializers.CharField()
 
     class Meta:
-        model = CustomUser
+        model = OrgUser
         fields = ['mobile_number', 'password']
+
     def validate(self, attrs):
         mobile_number = attrs.get('mobile_number')
         password = attrs.get('password')
-        
-        try:
-            user = CustomUser.objects.get(mobile_number=mobile_number)
-        except CustomUser.DoesNotExist:
-            raise serializers.ValidationError('Invalid mobile number')
-        
-        if user.password != password:  # Plain text comparison for now
-            raise serializers.ValidationError('Invalid password')
-        
+
+        # 🔍 Find user using variants (handles 91 prefix)
+        user = OrgUser.objects.filter(
+            mobile_number__in=mobile_number_variants(mobile_number)
+        ).first()
+
+        if not user:
+            print(f"🕵️ Login Failed: User with mobile {mobile_number} not found.")
+            raise serializers.ValidationError("Invalid mobile number")
+
+        print(f"👤 Login Attempt: Found user {user.name} ({user.mobile_number})")
+
+        # 🔐 Check password
+        if not user.check_password(password):
+            raise serializers.ValidationError("Invalid password")
+
+        # ✅ Generate tokens
         refresh = RefreshToken.for_user(user)
-        
+
+        # ✅ Return user data with tokens
         return {
-            'user': user,
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-            'org_id': user.org_id,  # Add org_id to response
-            'user_role': 'organization' if user.is_organization else 'employee'  # Add user_role
+            "user": user,
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+            "org_id": user.org_id,
+            "user_role": "organization" if user.is_organization else "employee"
         }
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -178,7 +208,7 @@ class OrganizationProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.SerializerMethodField()
     
     class Meta:
-        model = CustomUser
+        model = OrgUser
         fields = [
             'user_type', 'user_id', 'name', 'email', 
             'mobile_number', 'details'
@@ -225,3 +255,18 @@ class CustomuserSerializer(serializers.ModelSerializer):
             'attendances'
         ]
         depth = 1  # Shows nested relationships
+class EmployeeListSerializer(serializers.ModelSerializer):
+    employee_id = serializers.IntegerField(source='user.org_id', read_only=True)
+    mobile_number = serializers.CharField(source='user.mobile_number', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    department = serializers.PrimaryKeyRelatedField(read_only=True)
+    designation = serializers.PrimaryKeyRelatedField(read_only=True)
+    shift = serializers.PrimaryKeyRelatedField(read_only=True)
+    office_location = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = Customuser
+        fields = [
+            'employee_id', 'first_name', 'last_name', 'mobile_number', 'email',
+            'department', 'designation', 'shift', 'office_location'
+        ]

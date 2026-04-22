@@ -4,21 +4,36 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import CustomUser
-from employees.models import Customuser
 from .serializers import CustomUserSerializer, ProfileSerializer, Loginserializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
+
+def mobile_number_variants(mobile_number):
+    normalized = ''.join(filter(str.isdigit, str(mobile_number)))
+    variants = [normalized]
+    if normalized.startswith('91') and len(normalized) > 10:
+        variants.append(normalized[2:])
+    elif len(normalized) == 10:
+        variants.append(f'91{normalized}')
+    return list(dict.fromkeys(variants))
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_view(request):
-    serializer = CustomUserSerializer(data=request.data)
+    # Handle missing email by providing a default
+    data = request.data.copy()
+    if not data.get('email'):
+        # Generate a placeholder email based on mobile number
+        data['email'] = f"{data.get('mobile_number', 'user')}@placeholder.com"
+    
+    serializer = CustomUserSerializer(data=data)
     if serializer.is_valid():
             user = CustomUser.objects.create(
                 mobile_number=serializer.validated_data['mobile_number'],
-                name=serializer.validated_data['name']
+                name=serializer.validated_data['name'],
+                email=serializer.validated_data['email']
             )
             generated_password = user.generate_password()
-            user.password = generated_password
+            # user.password = generated_password # Standard Django hashing is now handled in manager
             user.save()
 
             return Response({
@@ -34,25 +49,44 @@ def login_view(request):
     serializer = Loginserializer(data=request.data)
     if serializer.is_valid():
         try:
-            user = CustomUser.objects.get(
-                mobile_number=serializer.validated_data['mobile_number']
-            )
-            # Directly compare the raw password
-            if user.password == serializer.validated_data['password']:
+            mobile_number = serializer.validated_data['mobile_number']
+            password = serializer.validated_data['password']
+            
+            # 🔍 Find user using variants (handles 91 prefix)
+            user = CustomUser.objects.filter(
+                mobile_number__in=mobile_number_variants(mobile_number)
+            ).first()
+
+            if not user:
+                print(f"🕵️ Login Failed: User with mobile {mobile_number} not found.")
+                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            print(f"👤 Login Attempt: Found user {user.name} ({user.mobile_number})")
+            
+            # 🔐 Use Django's secure check_password method
+            if user.check_password(password):
                 refresh = RefreshToken.for_user(user)
                 access_token = refresh.access_token
+                
+                # Custom claims for frontend role and organization handling
                 access_token['role'] = 'organization' if user.is_organization else 'employee'
-                access_token['org_id'] = user.org_id 
-                # Add role to token claims
+                access_token['org_id'] = user.org_id
+                
                 return Response({
-                    'access': str(refresh.access_token),
+                    'access': str(access_token),
                     'refresh': str(refresh),
                     'org_id': user.org_id,
-                    'role': 'organization' if user.is_organization else 'employee'
+                    'role': access_token['role']
                 })
+            
             return Response({'error': 'Invalid password'}, status=status.HTTP_401_UNAUTHORIZED)
+            
         except CustomUser.DoesNotExist:
             return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            print(f"Login Error: {e}")
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'PUT'])

@@ -16,12 +16,31 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.http import JsonResponse
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
     TokenVerifyView,
 )
+
+def api_root(request):
+    return JsonResponse({
+        "status": "running",
+        "message": "Mukham API is running",
+        "endpoints": {
+            "admin": "/admin/",
+            "employees": "/api/employees/",
+            "departments": "/api/departments/",
+            "designations": "/api/designations/",
+            "locations": "/api/locations/",
+            "shifts": "/api/shifts/",
+            "login": "/api/token/",
+            "refresh": "/api/token/refresh/",
+        }
+    })
+
 urlpatterns = [
+    path('', api_root, name='api_root'),
     path('admin/', admin.site.urls),
     path('api/', include('employees.urls')),
     path('api/', include('shifts.urls')),
