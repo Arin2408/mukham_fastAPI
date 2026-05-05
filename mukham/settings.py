@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'locations',
     'organisation',
     'shifts',
+    'face_auth',
 ]
 
 MIDDLEWARE = [
@@ -175,3 +176,17 @@ AUTH_USER_MODEL = 'organisation.CustomUser'
 #     'employees.auth_backends.EmployeeAuthBackend',
 #     'django.contrib.auth.backends.ModelBackend',
 # ]
+
+# AWS Configuration for Rekognition
+AWS_ACCESS_KEY_ID = 'AKIATT5OOK3KZ6YIQLPB'
+AWS_SECRET_ACCESS_KEY = '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'
+AWS_DEFAULT_REGION = 'us-east-1'
+
+# Email Configuration
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.resend.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'resend'
+EMAIL_HOST_PASSWORD = 're_Cfa8paVR_LBVdBBfugJqzE4aSBc7j1bKy'
+DEFAULT_FROM_EMAIL = 'onboarding@resend.dev'

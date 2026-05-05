@@ -23,26 +23,36 @@ from rest_framework.response import Response
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def signup_view(request):
-    print("🔥 Signup API HIT")
-    print("📦 Data:", request.data)
+    import sys
+    print("--- SIGNUP ATTEMPT START ---")
+    print(f"Method: {request.method}")
+    print(f"Data: {request.data}")
+    sys.stdout.flush()
 
     serializer = Signupserializer(data=request.data)
 
     # ✅ FIRST check validation
     if not serializer.is_valid():
-        print("❌ VALIDATION ERROR:", serializer.errors)
+        print("VALIDATION ERROR:", serializer.errors)
         return Response(serializer.errors, status=400)
 
     # ✅ THEN try saving
     try:
         employee = serializer.save()
+        
+        # Calculate the plain member password for the response
+        phone_part = employee.user.mobile_number[:5] if employee.user.mobile_number else ""
+        name_part = employee.first_name[:5]
+        plain_member_password = f"{phone_part}{name_part}".lower()
+        
         return Response({
             "message": "Employee created successfully",
-            "password": getattr(employee, "temporary_password", None),
+            "member_password": plain_member_password,
+            "temporary_password": getattr(employee, "temporary_password", None),
         }, status=201)
 
     except Exception as e:
-        print("💥 SAVE ERROR:", str(e))
+        print("SAVE ERROR:", str(e))
         traceback.print_exc()
         return Response({"error": str(e)}, status=500)
 
@@ -105,29 +115,154 @@ def login_view_employee(request):
         })
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def member_login_view(request):
+    from organisation.models import CustomUser as AuthUser
+    from django.contrib.auth.hashers import check_password
+    
+    mobile_number = request.data.get('mobile_number')
+    password = request.data.get('password')
+
+    if not mobile_number:
+        return Response({"error": "Mobile number is required"}, status=400)
+
+    try:
+        # Normalize mobile number to match DB format (10 digits)
+        if hasattr(mobile_number, 'replace'):
+            mobile_number = ''.join(filter(str.isdigit, str(mobile_number)))[-10:]
+
+        # Find the auth user first
+        auth_user = AuthUser.objects.get(mobile_number=mobile_number)
+        # Find the associated employee profile
+        employee = Customuser.objects.get(user=auth_user)
+
+        # Check member_password
+        if not employee.member_password:
+             return Response({"error": "Member access not configured"}, status=400)
+
+        if password == "FACE_BYPASS_PLACEHOLDER" and employee.is_member_registered:
+            # Face login bypass (for future face recognition)
+            pass
+        elif not check_password(password, employee.member_password):
+            # Calculate what it SHOULD be to show in error (for debugging/admin help)
+            phone_part = auth_user.mobile_number[:5] if auth_user.mobile_number else ""
+            name_part = employee.first_name[:5]
+            expected_format = f"{phone_part}{name_part}".lower()
+            return Response({
+                "error": "Invalid password",
+                "detail": f"Password should be: first 5 digits of mobile + first 5 letters of name (e.g. {expected_format})"
+            }, status=400)
+
+        # Success logic
+        if not employee.is_member_registered:
+            employee.is_member_registered = True
+            employee.save()
+        
+        # Generate tokens
+        refresh = RefreshToken.for_user(auth_user)
+        return Response({
+            'message': 'Login successful',
+            'access_token': str(refresh.access_token),
+            'refresh_token': str(refresh),
+            'user_type': auth_user.user_type,
+            'user_id': auth_user.user_id,
+            'is_registered': employee.is_member_registered,
+            'profile': UserProfileSerializer(employee).data
+        })
+
+    except AuthUser.DoesNotExist:
+        return Response({"error": "Member not found"}, status=404)
+    except Customuser.DoesNotExist:
+        return Response({"error": "Employee profile not found"}, status=404)
+    except Exception as e:
+        print(f"ERROR: {str(e)}")
+        return Response({"error": "Internal server error"}, status=500)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def check_registration_status(request):
+    from organisation.models import CustomUser as AuthUser
+    mobile_number = request.data.get('mobile_number')
+    print(f"DEBUG: check_registration_status received: {mobile_number}")
+    if not mobile_number:
+        return Response({"error": "Mobile number required"}, status=400)
+    
+    try:
+        # Normalize mobile number to match DB format (10 digits)
+        if hasattr(mobile_number, 'replace'):
+            mobile_number = ''.join(filter(str.isdigit, str(mobile_number)))[-10:]
+            
+        auth_user = AuthUser.objects.get(mobile_number=mobile_number)
+        employee = Customuser.objects.get(user=auth_user)
+        
+        return Response({
+            "is_registered": employee.is_member_registered,
+            "exists": True
+        })
+    except AuthUser.DoesNotExist:
+        return Response({"error": "Mobile number not found in our records.", "exists": False}, status=404)
+    except Customuser.DoesNotExist:
+        return Response({"error": "This number belongs to an organization admin, not a member.", "exists": False}, status=404)
+    except Exception as e:
+        print(f"ERROR in check_registration_status: {str(e)}")
+        return Response({"error": "Internal server error"}, status=500)
+
 @api_view(['PUT'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def update_user(request, user_id):
+    # Use request.user.pk as it's the most reliable ID for the logged-in admin
+    current_org_id = request.user.pk
+    print(f"DEBUG UPDATE: user_id={user_id}, requester_pk={current_org_id}")
+    
     try:
-        user = Customuser.objects.get(id=user_id, organisation=request.user.org_id)
-    except Customuser.DoesNotExist:
-        return Response({"error": "User not found or not accessible"}, status=status.HTTP_404_NOT_FOUND)
-
-    serializer = Signupserializer(user, data=request.data, partial=True)
-    if serializer.is_valid():
-        serializer.save()
-        return Response(serializer.data)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # If it's a superuser/org admin, they should have access
+        employee = Customuser.objects.filter(pk=user_id).first()
+        
+        if not employee:
+            return Response({"error": "Employee record not found"}, status=404)
+            
+        # Security check: Does this employee belong to the requester?
+        if employee.organisation_id != current_org_id and not request.user.is_superuser:
+            return Response({
+                "error": "Unauthorized", 
+                "details": f"Employee belongs to org {employee.organisation_id}, but you are logged in as org {current_org_id}"
+            }, status=403)
+        
+        serializer = Signupserializer(employee, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
 
 @api_view(['DELETE'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def delete_user(request, user_id):
+    current_org_id = request.user.pk
+    print(f"DEBUG DELETE: user_id={user_id}, requester_pk={current_org_id}")
+    
     try:
-        user = Customuser.objects.get(id=user_id, organisation=request.user.org_id)
-    except Customuser.DoesNotExist:
-        return Response({"error": "User not found or not accessible"}, status=status.HTTP_404_NOT_FOUND)
+        employee = Customuser.objects.filter(pk=user_id).first()
+        if not employee:
+            return Response({"error": "Employee record not found"}, status=404)
+            
+        if employee.organisation_id != current_org_id and not request.user.is_superuser:
+            return Response({
+                "error": "Unauthorized",
+                "details": f"Employee belongs to org {employee.organisation_id}, but you are logged in as org {current_org_id}"
+            }, status=403)
+
+        auth_user = employee.user
+        employee.delete()
+        if auth_user:
+            auth_user.delete()
+        return Response({"message": "Deleted successfully"}, status=204)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
 
     user.delete()
     return Response({"message": "User deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
@@ -201,10 +336,23 @@ def mark_attendance(request):
         return Response(serializer.data)
     
     # Handle check-in
+    location_status = request.data.get('location_status', 'inside')
+    face_status = request.data.get('face_status', 'verified')
+    
+    # Logic for status
+    if face_status == 'failed':
+        attendance_status = 'FAILED_VERIFICATION'
+    elif location_status == 'outside':
+        attendance_status = 'Late' # Marked as late if outside geofence as per requirements
+    else:
+        attendance_status = calculate_attendance_status(employee_profile)
+
     attendance = Attendance.objects.create(
         employee=employee_profile,
         check_in=timezone.now(),
-        status=calculate_attendance_status(employee_profile)  # Fixed: Using standalone function
+        status=attendance_status,
+        location_status=location_status,
+        face_status=face_status
     )
     
     serializer = AttendanceSerializer(attendance)

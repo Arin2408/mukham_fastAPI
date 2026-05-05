@@ -9,14 +9,8 @@ from locations.models import Location
 from organisation.models import CustomUser as OrgUser
 from rest_framework_simplejwt.tokens import RefreshToken
 
-def mobile_number_variants(mobile_number):
-    normalized = ''.join(filter(str.isdigit, str(mobile_number)))
-    variants = [normalized]
-    if normalized.startswith('91') and len(normalized) > 10:
-        variants.append(normalized[2:])
-    elif len(normalized) == 10:
-        variants.append(f'91{normalized}')
-    return list(dict.fromkeys(variants))
+def normalize_mobile(mobile_number):
+    return ''.join(filter(str.isdigit, str(mobile_number)))[-10:]
 
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -36,7 +30,7 @@ class ShiftSerializer(serializers.ModelSerializer):
 class LocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
-        fields = ['location_id', 'location_name']
+        fields = ['location_id', 'location_name', 'latitude', 'longitude']
 
 class EmployeeDetailSerializer(serializers.ModelSerializer):
     department = DepartmentSerializer()
@@ -87,6 +81,10 @@ class Signupserializer(serializers.ModelSerializer):
     first_name = serializers.CharField(required=True)
     last_name = serializers.CharField(required=True)
     org_id = serializers.IntegerField(write_only=True, required=True)
+    department = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    designation = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    shift = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    office_location = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     class Meta:
         model = Customuser
         fields = [
@@ -97,6 +95,17 @@ class Signupserializer(serializers.ModelSerializer):
             'organisation': {'required': False}
         }
 
+    def validate_mobile_number(self, value):
+        normalized = normalize_mobile(value)
+        if OrgUser.objects.filter(mobile_number=normalized).exists():
+            raise serializers.ValidationError("A user with this mobile number already exists.")
+        return normalized
+
+    def validate_email(self, value):
+        if OrgUser.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+
     def create(self, validated_data):
         # Extract user data
         mobile_number = validated_data.pop('mobile_number')
@@ -104,17 +113,23 @@ class Signupserializer(serializers.ModelSerializer):
         first_name = validated_data.pop('first_name')
         last_name = validated_data.pop('last_name')
         org_id = validated_data.pop('org_id', None)
+        department_id = validated_data.pop('department', None)
+        designation_id = validated_data.pop('designation', None)
+        shift_id = validated_data.pop('shift', None)
+        location_id = validated_data.pop('office_location', None)
 
         from organisation.models import CustomUser as OrgUser
         
-        # Ensure 'organisation' is set from org_id if not already present
-        if not validated_data.get('organisation') and org_id:
+        # Resolve Organization
+        org_obj = None
+        if org_id:
             try:
-                validated_data['organisation'] = CustomUser.objects.get(org_id=org_id)
+                org_obj = OrgUser.objects.get(org_id=org_id)
             except OrgUser.DoesNotExist:
                 raise serializers.ValidationError({"org_id": "Invalid organization ID"})
         
-        # Create user (password auto-generated in manager)
+        # Normalize mobile before lookup/creation
+        mobile_number = normalize_mobile(mobile_number)
         user = OrgUser.objects.create_user(
             mobile_number=mobile_number,
             email=email,
@@ -122,17 +137,51 @@ class Signupserializer(serializers.ModelSerializer):
             is_organization=False
         )
         
-        # Create employee
+        # Create employee with direct ID fields - this is the most robust way to avoid "expected a number" errors
         employee = Customuser.objects.create(
             user=user,
             first_name=first_name,
             last_name=last_name,
-            **validated_data
+            department_id=department_id,
+            designation_id=designation_id,
+            shift_id=shift_id,
+            office_location_id=location_id,
+            organisation=org_obj
         )
         
         # Add password to response data - GET the generated plain text password from the user object
         employee.temporary_password = getattr(user, 'temporary_password', None)
         return employee
+
+    def update(self, instance, validated_data):
+        # Extract user data
+        mobile_number = validated_data.pop('mobile_number', None)
+        email = validated_data.pop('email', None)
+        first_name = validated_data.pop('first_name', None)
+        last_name = validated_data.pop('last_name', None)
+        org_id = validated_data.pop('org_id', None)
+
+        # Update associated AuthUser
+        user = instance.user
+        if mobile_number:
+            user.mobile_number = normalize_mobile(mobile_number)
+        if email:
+            user.email = email
+        if first_name and last_name:
+            user.name = f"{first_name} {last_name}"
+        user.save()
+
+        # Update profile fields
+        if first_name:
+            instance.first_name = first_name
+        if last_name:
+            instance.last_name = last_name
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        instance.save()
+        return instance
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -150,16 +199,16 @@ class Loginemployeeserializer(serializers.ModelSerializer):
         mobile_number = attrs.get('mobile_number')
         password = attrs.get('password')
 
-        # 🔍 Find user using variants (handles 91 prefix)
+        # 🔍 Find user using normalized 10-digit mobile number
         user = OrgUser.objects.filter(
-            mobile_number__in=mobile_number_variants(mobile_number)
+            mobile_number=normalize_mobile(mobile_number)
         ).first()
 
         if not user:
-            print(f"🕵️ Login Failed: User with mobile {mobile_number} not found.")
+            print(f"Login Failed: User with mobile {mobile_number} (normalized: {normalize_mobile(mobile_number)}) not found.")
             raise serializers.ValidationError("Invalid mobile number")
 
-        print(f"👤 Login Attempt: Found user {user.name} ({user.mobile_number})")
+        print(f"Login Attempt: Found user {user.name} ({user.mobile_number})")
 
         # 🔐 Check password
         if not user.check_password(password):

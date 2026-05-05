@@ -11,6 +11,9 @@ class CustomUserManager(BaseUserManager):
             
         email = self.normalize_email(email)
         
+        # Normalize mobile number to 10 digits
+        mobile_number = ''.join(filter(str.isdigit, str(mobile_number)))[-10:]
+        
         # Generate password if not provided
         if not password:
             password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
@@ -58,6 +61,12 @@ class CustomUser(AbstractUser):
         random_pass = get_random_string(8)
         self.set_password(random_pass)
         return random_pass
+
+    def save(self, *args, **kwargs):
+        # Normalize mobile number to 10 digits before saving
+        if self.mobile_number:
+            self.mobile_number = ''.join(filter(str.isdigit, str(self.mobile_number)))[-10:]
+        super().save(*args, **kwargs)
     @property
     def user_type(self):
         return "organization" if self.is_organization else "employee"

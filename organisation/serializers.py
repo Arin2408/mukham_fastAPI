@@ -13,6 +13,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'details': {'required': False}
         }
 
+    def validate_mobile_number(self, value):
+        from .views import normalize_mobile
+        normalized = normalize_mobile(value)
+        if CustomUser.objects.filter(mobile_number=normalized).exists():
+            raise serializers.ValidationError("A user with this mobile number already exists.")
+        return normalized
+
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser

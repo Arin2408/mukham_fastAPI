@@ -48,6 +48,7 @@ urlpatterns = [
     path('api/', include('locations.urls')),
     path('api/', include('designations.urls')),
     path('api/', include('departments.urls')),
+    path('api/face/', include('face_auth.urls')),
     # path('api/', include('registerusers.urls')),
     # path('api/', include('registrations.urls')),
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
