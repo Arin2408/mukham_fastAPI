@@ -10,15 +10,7 @@ from .serializers import OrganizationProfileSerializer, Signupserializer, Logine
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.exceptions import PermissionDenied, NotFound
 import traceback
-from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework import status
-
-import traceback
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
+import sys
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -44,7 +36,7 @@ def signup_view(request):
         phone_part = employee.user.mobile_number[:5] if employee.user.mobile_number else ""
         name_part = employee.first_name[:5]
         plain_member_password = f"{phone_part}{name_part}".lower()
-        
+    
         return Response({
             "message": "Employee created successfully",
             "member_password": plain_member_password,
@@ -64,14 +56,24 @@ def signup_view(request):
 def list_users(request):
     org_id = request.query_params.get('org_id')
     
-    # Handle cases where org_id might be 'undefined' or 'null' literals from frontend
-    if org_id in [None, '', 'undefined', 'null']:
+    # Always prioritize the logged-in user's org_id if they are an organization
+    if request.user.is_organization:
+        org_id = request.user.org_id
+    elif org_id in [None, '', 'undefined', 'null']:
         org_id = getattr(request.user, 'org_id', None)
+    
+    print(f"DEBUG LIST USERS (FIXED): Final Org ID used={org_id}")
+    import sys
+    sys.stdout.flush()
 
     # If the requester is an organization or they are requesting a list for an org
     if (request.user.is_organization or org_id) and org_id not in [None, '', 'undefined', 'null']:
         try:
-            employees = Customuser.objects.filter(organisation_id=org_id)
+            # Filter by org_id and EXCLUDE the organization admin accounts themselves
+            employees = Customuser.objects.filter(
+                organisation_id=org_id
+            ).exclude(user__is_organization=True)
+            
             serializer = EmployeeListSerializer(employees, many=True)
             return Response(serializer.data)
         except (ValueError, TypeError):
@@ -250,16 +252,24 @@ def delete_user(request, user_id):
         if not employee:
             return Response({"error": "Employee record not found"}, status=404)
             
-        if employee.organisation_id != current_org_id and not request.user.is_superuser:
+        # Security check: Does this employee belong to the requester?
+        print(f"SECURITY CHECK: Employee's Org ID={employee.organisation_id}, Requester's User ID={request.user.pk}")
+        
+        is_owner = (employee.organisation_id == request.user.pk)
+        is_admin = getattr(request.user, 'is_organization', False) or request.user.is_superuser
+        
+        if not (is_owner and is_admin) and not request.user.is_superuser:
             return Response({
                 "error": "Unauthorized",
-                "details": f"Employee belongs to org {employee.organisation_id}, but you are logged in as org {current_org_id}"
+                "details": f"Ownership Check: {is_owner} (EmpOrg:{employee.organisation_id} vs ReqUser:{request.user.pk}), Admin Check: {is_admin}"
             }, status=403)
 
         auth_user = employee.user
-        employee.delete()
         if auth_user:
-            auth_user.delete()
+            auth_user.delete() # This will cascade and delete the employee record too
+        else:
+            employee.delete()
+            
         return Response({"message": "Deleted successfully"}, status=204)
     except Exception as e:
         return Response({"error": str(e)}, status=500)
@@ -314,13 +324,21 @@ def calculate_attendance_status(employee):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def mark_attendance(request):
-    try:
-        employee_profile = request.user.employee
-    except AttributeError:
-        return Response(
-            {'error': 'Employee profile not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+    # Allow manual marking by organization admins
+    employee_id = request.data.get('employee_id')
+    if employee_id and request.user.is_organization:
+        try:
+            employee_profile = Customuser.objects.get(pk=employee_id, organisation=request.user)
+        except Customuser.DoesNotExist:
+            return Response({'error': 'Employee not found in your organization'}, status=status.HTTP_404_NOT_FOUND)
+    else:
+        try:
+            employee_profile = request.user.employee
+        except AttributeError:
+            return Response(
+                {'error': 'Employee profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
     
     # Check for existing open attendance
     active_attendance = Attendance.objects.filter(

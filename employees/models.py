@@ -19,6 +19,7 @@ class Customuser(models.Model):
     designation = models.ForeignKey(Designation, on_delete=models.SET_NULL, null=True)
     shift = models.ForeignKey(Shift, on_delete=models.SET_NULL, null=True)
     office_location = models.ForeignKey(Location, on_delete=models.SET_NULL, null=True)
+    photo = models.ImageField(upload_to='employee_photos/', null=True, blank=True)
     organisation = models.ForeignKey(
         CustomUser, 
         on_delete=models.CASCADE,

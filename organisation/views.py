@@ -49,21 +49,20 @@ def login_view(request):
             # 🔍 Find user using normalized 10-digit mobile number
             raw_mobile = mobile_number
             normalized_mobile = normalize_mobile(raw_mobile)
+            print(f"DEBUG LOGIN: Searching for user with normalized mobile: {normalized_mobile}")
             user = CustomUser.objects.filter(
                 mobile_number=normalized_mobile
             ).first()
 
-            print(f"DEBUG LOGIN: Raw='{raw_mobile}', Normalized='{normalized_mobile}'")
-
             if not user:
-                print(f"DEBUG LOGIN Failed: User not found in DB.")
+                print(f"DEBUG LOGIN Failed: User NOT found for mobile '{normalized_mobile}'. Users in DB: {[u.mobile_number for u in CustomUser.objects.all()]}")
                 return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
             print(f"DEBUG LOGIN: Found user '{user.name}' (ID: {user.org_id})")
             
             # 🔐 Use Django's secure check_password method
             pass_match = user.check_password(password)
-            print(f"DEBUG LOGIN: Password Match={pass_match}")
+            print(f"DEBUG LOGIN: Password Match result for '{password}': {pass_match}")
 
             if pass_match:
                 refresh = RefreshToken.for_user(user)

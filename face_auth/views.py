@@ -82,6 +82,20 @@ def register_face(request):
     serializer = FaceRegistrationSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
+        
+        # --- NEW: Sync photo to Employee Profile for ID Card ---
+        try:
+            from django.core.files.base import ContentFile
+            from employees.models import Customuser as EmployeeRecord
+            
+            employee = EmployeeRecord.objects.get(user__mobile_number=normalized_new)
+            image_name = f"face_{normalized_new}.jpg"
+            employee.photo.save(image_name, ContentFile(new_face_bytes), save=True)
+            print(f"Successfully synced face photo for {normalized_new}")
+        except Exception as e:
+            print(f"Failed to sync photo to employee profile: {str(e)}")
+        # --- END SYNC ---
+
         return Response({"message": "Face data registered successfully"}, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

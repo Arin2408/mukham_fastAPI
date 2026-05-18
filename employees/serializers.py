@@ -97,12 +97,18 @@ class Signupserializer(serializers.ModelSerializer):
 
     def validate_mobile_number(self, value):
         normalized = normalize_mobile(value)
-        if OrgUser.objects.filter(mobile_number=normalized).exists():
+        queryset = OrgUser.objects.filter(mobile_number=normalized)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.user.pk)
+        if queryset.exists():
             raise serializers.ValidationError("A user with this mobile number already exists.")
         return normalized
 
     def validate_email(self, value):
-        if OrgUser.objects.filter(email=value).exists():
+        queryset = OrgUser.objects.filter(email=value)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.user.pk)
+        if queryset.exists():
             raise serializers.ValidationError("A user with this email already exists.")
         return value
 
@@ -118,8 +124,6 @@ class Signupserializer(serializers.ModelSerializer):
         shift_id = validated_data.pop('shift', None)
         location_id = validated_data.pop('office_location', None)
 
-        from organisation.models import CustomUser as OrgUser
-        
         # Resolve Organization
         org_obj = None
         if org_id:
@@ -312,10 +316,15 @@ class EmployeeListSerializer(serializers.ModelSerializer):
     designation = serializers.PrimaryKeyRelatedField(read_only=True)
     shift = serializers.PrimaryKeyRelatedField(read_only=True)
     office_location = serializers.PrimaryKeyRelatedField(read_only=True)
+    designation_name = serializers.CharField(source='designation.details', read_only=True, default="N/A")
+    department_name = serializers.CharField(source='department.details', read_only=True, default="N/A")
+    shift_name = serializers.CharField(source='shift.shift_name', read_only=True, default="N/A")
+    location_name = serializers.CharField(source='office_location.location_name', read_only=True, default="N/A")
 
     class Meta:
         model = Customuser
         fields = [
             'employee_id', 'first_name', 'last_name', 'mobile_number', 'email',
-            'department', 'designation', 'shift', 'office_location'
+            'department', 'designation', 'shift', 'office_location',
+            'designation_name', 'department_name', 'shift_name', 'location_name', 'photo'
         ]

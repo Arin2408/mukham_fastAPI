@@ -8,6 +8,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from departments.models import Department
 from organisation.models import CustomUser
+from employees.models import Customuser
 
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
@@ -62,3 +63,27 @@ def delete_shift(request, shift_id):
 
     shift.delete()
     return Response({"message": "Shift deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def bulk_assign_shift(request):
+    department_id = request.data.get('department_id')
+    shift_id = request.data.get('shift_id')
+
+    if not department_id or not shift_id:
+        return Response({"error": "department_id and shift_id are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        department = Department.objects.get(department_id=department_id, org=request.user.org_id)
+        shift = Shift.objects.get(shift_id=shift_id, department=department)
+    except (Department.DoesNotExist, Shift.DoesNotExist):
+        return Response({"error": "Department or Shift not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    # Update all employees in this department
+    updated_count = Customuser.objects.filter(department=department).update(shift=shift)
+
+    return Response({
+        "message": f"Successfully assigned shift to {updated_count} employees",
+        "updated_count": updated_count
+    }, status=status.HTTP_200_OK)
