@@ -12,22 +12,28 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 import os
+from datetime import timedelta
+from dotenv import load_dotenv
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
+load_dotenv(BASE_DIR / ".env")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fallback-key-for-dev-only')
+SECRET_KEY = os.getenv(
+    'SECRET_KEY',
+    'django-insecure-fallback-key-for-dev-only'
+)
 
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '127.0.0.1,localhost,10.0.2.2,backend').split(',')
+ALLOWED_HOSTS = os.getenv(
+    'ALLOWED_HOSTS',
+    '127.0.0.1,localhost,10.0.2.2,backend'
+).split(',')
 
 
 # Application definition
@@ -39,10 +45,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework.authtoken',
     'corsheaders',
+
     'employees',
     'departments',
     'designations',
@@ -51,6 +59,7 @@ INSTALLED_APPS = [
     'shifts',
     'face_auth',
 ]
+
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -63,9 +72,11 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+
 ROOT_URLCONF = 'mukham.urls'
 
 CORS_ALLOW_CREDENTIALS = True
+
 
 TEMPLATES = [
     {
@@ -83,20 +94,43 @@ TEMPLATES = [
     },
 ]
 
+
 WSGI_APPLICATION = 'mukham.wsgi.application'
 
-CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000').split(',')
-CSRF_TRUSTED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000').split(',')
 
-# Database
-# https://docs.djangoproject.com/en/5.1/ref/settings/#databases
+CORS_ALLOWED_ORIGINS = os.getenv(
+    'CORS_ALLOWED_ORIGINS',
+    'http://localhost:3000,http://127.0.0.1:3000'
+).split(',')
 
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    'CORS_ALLOWED_ORIGINS',
+    'http://localhost:3000,http://127.0.0.1:3000'
+).split(',')
+
+
+# ============================================================
+# Database - PostgreSQL
+# ============================================================
 DATABASES = {
     'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('POSTGRES_DB', 'mukham'),
+        'USER': os.getenv('POSTGRES_USER', 'postgres'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
+        'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
+    },
+
+    'sqlite_source': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    },
 }
+
+# ============================================================
+# Django REST Framework
+# ============================================================
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -109,13 +143,15 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'TIME_INPUT_FORMATS': [
-        '%H:%M',        # '14:30'
-        '%H:%M:%S',     # '14:30:59'
+        '%H:%M',
+        '%H:%M:%S',
     ],
 }
 
+
+# ============================================================
 # Password validation
-# https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
+# ============================================================
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -133,8 +169,9 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+# ============================================================
 # Internationalization
-# https://docs.djangoproject.com/en/5.1/topics/i18n/
+# ============================================================
 
 LANGUAGE_CODE = 'en-us'
 
@@ -145,19 +182,26 @@ USE_I18N = True
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.1/howto/static-files/
+# ============================================================
+# Static / Media files
+# ============================================================
 
 STATIC_URL = 'static/'
+
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
+
+# ============================================================
+# Default primary key
+# ============================================================
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-from datetime import timedelta
+
+# ============================================================
+# JWT Configuration
+# ============================================================
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
@@ -169,18 +213,35 @@ SIMPLE_JWT = {
 }
 
 
+# ============================================================
+# Custom User Model
+# ============================================================
+
 AUTH_USER_MODEL = 'organisation.CustomUser'
+
+
 # AUTHENTICATION_BACKENDS = [
 #     'employees.auth_backends.EmployeeAuthBackend',
 #     'django.contrib.auth.backends.ModelBackend',
 # ]
 
+
+# ============================================================
 # AWS Configuration for Rekognition
+# ============================================================
+
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-AWS_DEFAULT_REGION = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+AWS_DEFAULT_REGION = os.getenv(
+    'AWS_DEFAULT_REGION',
+    'us-east-1'
+)
 
+
+# ============================================================
 # Email Configuration
+# ============================================================
+
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.resend.com'
 EMAIL_PORT = 587

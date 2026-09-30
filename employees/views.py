@@ -326,6 +326,7 @@ def calculate_attendance_status(employee):
 def mark_attendance(request):
     # Allow manual marking by organization admins
     employee_id = request.data.get('employee_id')
+    print("DEBUG AUTH USER:", request.user, "ID:", request.user.pk)
     if employee_id and request.user.is_organization:
         try:
             employee_profile = Customuser.objects.get(pk=employee_id, organisation=request.user)
