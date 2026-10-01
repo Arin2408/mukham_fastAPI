@@ -175,7 +175,8 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Indian Standard Time (shift times are saved in local time)
+TIME_ZONE = 'Asia/Kolkata'
 
 USE_I18N = True
 
@@ -234,7 +235,7 @@ AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_DEFAULT_REGION = os.getenv(
     'AWS_DEFAULT_REGION',
-    'us-east-1'
+    'ap-south-1'
 )
 
 
