@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -7,10 +9,13 @@ from .models import CustomUser
 from .serializers import CustomUserSerializer, ProfileSerializer, Loginserializer
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+logger = logging.getLogger(__name__)
+
 def normalize_mobile(mobile_number):
     return ''.join(filter(str.isdigit, str(mobile_number)))[-10:]
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def register_view(request):
     # Handle missing email by providing a default
@@ -38,6 +43,7 @@ def register_view(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def login_view(request):
     serializer = Loginserializer(data=request.data)
@@ -49,20 +55,15 @@ def login_view(request):
             # 🔍 Find user using normalized 10-digit mobile number
             raw_mobile = mobile_number
             normalized_mobile = normalize_mobile(raw_mobile)
-            print(f"DEBUG LOGIN: Searching for user with normalized mobile: {normalized_mobile}")
             user = CustomUser.objects.filter(
                 mobile_number=normalized_mobile
             ).first()
 
             if not user:
-                print(f"DEBUG LOGIN Failed: User NOT found for mobile '{normalized_mobile}'. Users in DB: {[u.mobile_number for u in CustomUser.objects.all()]}")
                 return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
-            print(f"DEBUG LOGIN: Found user '{user.name}' (ID: {user.org_id})")
-            
             # 🔐 Use Django's secure check_password method
             pass_match = user.check_password(password)
-            print(f"DEBUG LOGIN: Password Match result for '{password}': {pass_match}")
 
             if pass_match:
                 refresh = RefreshToken.for_user(user)
@@ -84,9 +85,7 @@ def login_view(request):
         except CustomUser.DoesNotExist:
             return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            import traceback
-            print("LOGIN CRASHED!")
-            traceback.print_exc()
+            logger.exception("Organisation login failed")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -125,10 +124,10 @@ def get_organisation(request, org_id):
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def forgot_password(request):
     email = request.data.get('email')
-    print(f"DEBUG: Received forgot password request for email: {email}")
     
     if not email:
         return Response({"error": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -155,10 +154,11 @@ def forgot_password(request):
         # But for debugging, we'll return a clear error for now.
         return Response({"error": "User with this email does not exist"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        print(f"ERROR sending email: {str(e)}")
+        logger.exception("Failed to send password reset email")
         return Response({"error": f"Failed to send email: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def reset_password(request):
     email = request.data.get('email')

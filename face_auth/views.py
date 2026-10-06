@@ -1,4 +1,5 @@
 import base64
+import logging
 import time
 
 import boto3
@@ -9,7 +10,7 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -17,14 +18,18 @@ from organisation.models import CustomUser
 from .models import EmployeeFaceData
 from .serializers import FaceRegistrationSerializer, FaceDataSerializer
 
+logger = logging.getLogger(__name__)
+
 
 # =========================================================
 # Initialize AWS Rekognition Client
 # =========================================================
 
+# Fail fast: a stuck AWS call should not hold a server worker for long.
+# Worst case per call is roughly (connect + read) x total_max_attempts.
 aws_config = Config(
-    connect_timeout=10,
-    read_timeout=20,
+    connect_timeout=3,
+    read_timeout=8,
     retries={
         "total_max_attempts": 2,
         "mode": "standard"
@@ -63,10 +68,10 @@ def sync_employee_photo(normalized, image_bytes):
             ContentFile(image_bytes),
             save=True
         )
-        print(f"Successfully synced face photo for {normalized}")
+        logger.debug("Synced face photo for %s", normalized)
 
     except Exception as e:
-        print(f"Failed to sync photo to employee profile: {str(e)}")
+        logger.warning("Failed to sync face photo to employee profile for %s: %s", normalized, e)
 
 
 def is_duplicate_face(normalized, image_bytes):
@@ -92,9 +97,10 @@ def is_duplicate_face(normalized, image_bytes):
                 return True
 
         except Exception as e:
-            print(
-                f"Skipping comparison for "
-                f"{other.user.mobile_number}: {str(e)}"
+            logger.warning(
+                "Duplicate-face check: skipping comparison for %s: %s",
+                other.user_id,
+                e
             )
             continue
 
@@ -106,6 +112,7 @@ def is_duplicate_face(normalized, image_bytes):
 # =========================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def create_liveness_session(request):
     """Create an AWS Rekognition Face Liveness session"""
@@ -116,7 +123,7 @@ def create_liveness_session(request):
         response = rekognition.create_face_liveness_session()
 
         elapsed_time = time.perf_counter() - start_time
-        print(f"LIVENESS CREATE AWS TIME: {elapsed_time:.2f} seconds")
+        logger.debug("Liveness create AWS time: %.2fs", elapsed_time)
 
         return Response({
             "session_id": response["SessionId"],
@@ -124,14 +131,14 @@ def create_liveness_session(request):
         })
 
     except ClientError as e:
-        print(f"LIVENESS: AWS ClientError: {str(e)}")
+        logger.warning("Liveness create: AWS ClientError: %s", e)
         return Response(
             {"error": e.response["Error"]["Message"]},
             status=400
         )
 
     except Exception as e:
-        print(f"LIVENESS: Unexpected error: {str(e)}")
+        logger.exception("Liveness create failed")
         return Response(
             {"error": str(e)},
             status=500
@@ -143,6 +150,7 @@ def create_liveness_session(request):
 # =========================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def get_liveness_result(request):
     """
@@ -190,16 +198,17 @@ def get_liveness_result(request):
         )
 
         liveness_elapsed_time = time.perf_counter() - liveness_start_time
-        print(f"LIVENESS RESULT AWS TIME: {liveness_elapsed_time:.2f} seconds")
+        logger.debug("Liveness result AWS time: %.2fs", liveness_elapsed_time)
 
         confidence = response.get("Confidence", 0)
         session_status = response.get("Status")
         reference_image = response.get("ReferenceImage")
 
-        print(
-            f"LIVENESS: Session={session_id}, "
-            f"Status={session_status}, "
-            f"Confidence={confidence}"
+        logger.info(
+            "Liveness: session=%s status=%s confidence=%s",
+            session_id,
+            session_status,
+            confidence
         )
 
         # =================================================
@@ -209,7 +218,7 @@ def get_liveness_result(request):
         if session_status != "SUCCEEDED":
 
             total_elapsed_time = time.perf_counter() - total_start_time
-            print(f"LIVENESS TOTAL TIME: {total_elapsed_time:.2f} seconds")
+            logger.debug("Liveness total time: %.2fs", total_elapsed_time)
 
             return Response(
                 {
@@ -250,8 +259,6 @@ def get_liveness_result(request):
         # =================================================
 
         if mode == "register":
-
-            print(f"FACE REGISTER: Starting registration for {normalized}")
 
             if not CustomUser.objects.filter(
                 mobile_number=normalized
@@ -316,8 +323,11 @@ def get_liveness_result(request):
             sync_employee_photo(normalized, liveness_image_bytes)
 
             total_elapsed_time = time.perf_counter() - total_start_time
-            print(f"FACE REGISTRATION SUCCESS: {normalized}")
-            print(f"REGISTRATION TOTAL TIME: {total_elapsed_time:.2f} seconds")
+            logger.info(
+                "Face registered for %s in %.2fs",
+                normalized,
+                total_elapsed_time
+            )
 
             return Response(
                 {
@@ -343,7 +353,7 @@ def get_liveness_result(request):
         )
 
         db_elapsed_time = time.perf_counter() - db_start_time
-        print(f"FACE DB LOOKUP TIME: {db_elapsed_time:.4f} seconds")
+        logger.debug("Face DB lookup time: %.4fs", db_elapsed_time)
 
         # =================================================
         # 6. DECODE REGISTERED FACE
@@ -356,13 +366,11 @@ def get_liveness_result(request):
         )
 
         decode_elapsed_time = time.perf_counter() - decode_start_time
-        print(f"FACE IMAGE DECODE TIME: {decode_elapsed_time:.4f} seconds")
+        logger.debug("Face image decode time: %.4fs", decode_elapsed_time)
 
         # =================================================
         # 7. COMPARE REGISTERED FACE WITH LIVENESS IMAGE
         # =================================================
-
-        print(f"FACE VERIFY: Starting comparison for {normalized}...")
 
         compare_start_time = time.perf_counter()
 
@@ -373,7 +381,7 @@ def get_liveness_result(request):
         )
 
         compare_elapsed_time = time.perf_counter() - compare_start_time
-        print(f"FACE COMPARE AWS TIME: {compare_elapsed_time:.2f} seconds")
+        logger.debug("Face compare AWS time: %.2fs", compare_elapsed_time)
 
         # =================================================
         # 8. CHECK FACE MATCH
@@ -382,14 +390,14 @@ def get_liveness_result(request):
         matches = comparison.get("FaceMatches", [])
 
         total_elapsed_time = time.perf_counter() - total_start_time
-        print(
-            f"LIVENESS + FACE VERIFY TOTAL TIME: "
-            f"{total_elapsed_time:.2f} seconds"
+        logger.debug(
+            "Liveness + face verify total time: %.2fs",
+            total_elapsed_time
         )
 
         if matches:
             similarity = matches[0]["Similarity"]
-            print(f"FACE VERIFY: Match found! Similarity: {similarity}%")
+            logger.info("Face verify: match for %s (similarity %.1f%%)", normalized, similarity)
 
             return Response({
                 "verified": True,
@@ -399,7 +407,7 @@ def get_liveness_result(request):
                 "message": "Liveness and face verification successful."
             })
 
-        print("FACE VERIFY: No match found")
+        logger.info("Face verify: no match for %s", normalized)
 
         return Response(
             {
@@ -418,10 +426,7 @@ def get_liveness_result(request):
 
     except EmployeeFaceData.DoesNotExist:
 
-        print(f"FACE VERIFY: No registered face found for {normalized}")
-
-        total_elapsed_time = time.perf_counter() - total_start_time
-        print(f"LIVENESS TOTAL TIME: {total_elapsed_time:.2f} seconds")
+        logger.info("Face verify: no registered face for %s", normalized)
 
         return Response(
             {
@@ -437,10 +442,7 @@ def get_liveness_result(request):
 
     except ClientError as e:
 
-        print(f"LIVENESS/COMPARE: AWS ClientError: {str(e)}")
-
-        total_elapsed_time = time.perf_counter() - total_start_time
-        print(f"LIVENESS TOTAL TIME: {total_elapsed_time:.2f} seconds")
+        logger.warning("Liveness/compare: AWS ClientError: %s", e)
 
         return Response(
             {"error": e.response["Error"]["Message"]},
@@ -453,10 +455,7 @@ def get_liveness_result(request):
 
     except Exception as e:
 
-        print(f"LIVENESS/COMPARE: Unexpected error: {str(e)}")
-
-        total_elapsed_time = time.perf_counter() - total_start_time
-        print(f"LIVENESS TOTAL TIME: {total_elapsed_time:.2f} seconds")
+        logger.exception("Liveness/compare failed")
 
         return Response(
             {"error": str(e)},
@@ -469,6 +468,7 @@ def get_liveness_result(request):
 # =========================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def check_face_status(request):
     """Check if a mobile number has a face registered"""
@@ -505,6 +505,7 @@ def check_face_status(request):
 # =========================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def register_face(request):
     """Register face data for an employee, ensuring no duplicates exist."""
@@ -558,6 +559,7 @@ def register_face(request):
 # =========================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def verify_face(request):
     """Verify live face against stored reference image"""
@@ -581,8 +583,6 @@ def verify_face(request):
         stored_image_bytes = base64.b64decode(face_record.face_image_base64)
         captured_image_bytes = base64.b64decode(captured_image_base64)
 
-        print(f"DEBUG FACE: Starting comparison for {normalized}...")
-
         try:
             compare_start_time = time.perf_counter()
 
@@ -593,10 +593,10 @@ def verify_face(request):
             )
 
             compare_elapsed_time = time.perf_counter() - compare_start_time
-            print(f"DEBUG FACE: AWS COMPARE TIME: {compare_elapsed_time:.2f} seconds")
+            logger.debug("Face compare AWS time: %.2fs", compare_elapsed_time)
 
         except ClientError as e:
-            print(f"DEBUG FACE: AWS ClientError: {str(e)}")
+            logger.warning("Face verify: AWS ClientError: %s", e)
             return Response(
                 {
                     "error": (
@@ -611,7 +611,7 @@ def verify_face(request):
 
         if matches:
             similarity = matches[0]["Similarity"]
-            print(f"DEBUG FACE: Match found! Similarity: {similarity}%")
+            logger.info("Face verify: match for %s (similarity %.1f%%)", normalized, similarity)
 
             return Response({
                 "verified": True,
@@ -620,7 +620,7 @@ def verify_face(request):
                 "message": "Face verified successfully"
             })
 
-        print("DEBUG FACE: No match found")
+        logger.info("Face verify: no match for %s", normalized)
 
         return Response(
             {
@@ -636,7 +636,7 @@ def verify_face(request):
         )
 
     except EmployeeFaceData.DoesNotExist:
-        print(f"DEBUG FACE: No record for {normalized}")
+        logger.info("Face verify: no registered face for %s", normalized)
         return Response(
             {
                 "error": (
@@ -648,7 +648,7 @@ def verify_face(request):
         )
 
     except Exception as e:
-        print(f"DEBUG FACE: Unexpected error: {str(e)}")
+        logger.exception("Face verify failed")
         return Response(
             {"error": f"Internal Error: {str(e)}"},
             status=500
@@ -660,6 +660,7 @@ def verify_face(request):
 # =========================================================
 
 @api_view(['GET'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def get_face_details(request, mobile_number):
     """Retrieve face data for a specific mobile number"""

@@ -60,17 +60,19 @@ def delete_department(request, department_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def department_leaderboard(request):
-    departments = Department.objects.filter(org=request.user.org_id)
+    # Count total and on-time attendance per department in a single query
+    departments = Department.objects.filter(org=request.user.org_id).annotate(
+        total_attendance=Count('customuser__attendances'),
+        on_time_count=Count(
+            'customuser__attendances',
+            filter=Q(customuser__attendances__status__in=['Early', 'On Time'])
+        ),
+    )
     leaderboard_data = []
 
     for dept in departments:
-        # Get all attendance records for employees in this department
-        total_attendance = Attendance.objects.filter(employee__department=dept).count()
-        
-        on_time_count = Attendance.objects.filter(
-            employee__department=dept, 
-            status__in=['Early', 'On Time']
-        ).count()
+        total_attendance = dept.total_attendance
+        on_time_count = dept.on_time_count
 
         punctuality_score = (on_time_count / total_attendance * 100) if total_attendance > 0 else 0
 

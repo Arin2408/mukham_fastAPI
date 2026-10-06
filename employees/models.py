@@ -100,13 +100,69 @@ class Attendance(models.Model):
     check_out = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
 
+    SOURCE_CHOICES = [
+        ('self', 'self'),       # employee checked in with GPS + face
+        ('manual', 'manual'),   # organisation admin marked it
+    ]
+
+    CHECK_OUT_LOCATION_CHOICES = [
+        ('inside', 'inside'),
+        ('outside', 'outside'),
+        ('unknown', 'unknown'),  # no / unusable GPS sent at check-out
+        ('manual', 'manual'),
+    ]
+
     location_status = models.CharField(
         max_length=10,
         choices=[
             ('inside', 'inside'),
-            ('outside', 'outside')
+            ('outside', 'outside'),
+            ('manual', 'manual')
         ],
         default='inside'
+    )
+
+    # Who created the record
+    source = models.CharField(
+        max_length=10,
+        choices=SOURCE_CHOICES,
+        default='self'
+    )
+
+    marked_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+'
+    )
+
+    # GPS submitted at check-in (kept for auditing)
+    check_in_latitude = models.FloatField(null=True, blank=True)
+    check_in_longitude = models.FloatField(null=True, blank=True)
+    check_in_accuracy = models.FloatField(null=True, blank=True)
+    check_in_distance = models.FloatField(null=True, blank=True)
+
+    # Office the check-in was matched against
+    check_in_location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+'
+    )
+
+    # GPS submitted at check-out (check-out is never blocked, only flagged)
+    check_out_latitude = models.FloatField(null=True, blank=True)
+    check_out_longitude = models.FloatField(null=True, blank=True)
+    check_out_accuracy = models.FloatField(null=True, blank=True)
+    check_out_distance = models.FloatField(null=True, blank=True)
+
+    check_out_location_status = models.CharField(
+        max_length=10,
+        choices=CHECK_OUT_LOCATION_CHOICES,
+        null=True,
+        blank=True
     )
 
     face_status = models.CharField(
@@ -123,6 +179,26 @@ class Attendance(models.Model):
 
     class Meta:
         ordering = ['-check_in']
+        indexes = [
+            # Employee's own history: WHERE employee_id = ? ORDER BY check_in DESC
+            models.Index(
+                fields=['employee', '-check_in'],
+                name='attendance_emp_checkin_idx'
+            ),
+            # Organisation history with a date range: WHERE check_in >= ?
+            models.Index(
+                fields=['-check_in'],
+                name='attendance_checkin_idx'
+            ),
+        ]
+        constraints = [
+            # Only one open (not checked-out) attendance per employee
+            models.UniqueConstraint(
+                fields=['employee'],
+                condition=models.Q(check_out__isnull=True),
+                name='one_open_attendance_per_employee'
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if self.check_out and not self.hours_worked:

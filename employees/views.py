@@ -2,9 +2,12 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
+from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 import datetime
-from math import radians, sin, cos, sqrt, atan2
+from math import radians, sin, cos, sqrt, atan2, isfinite
 
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -26,15 +29,20 @@ from .serializers import (
     EmployeeListSerializer
 )
 
-import traceback
-import sys
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
 # GEO LOCATION HELPER
 # ============================================================
 
-GEOFENCE_RADIUS_METERS = 100
+# The geofence radius is stored per office (Location.radius_meters).
+# The GPS accuracy limit is settings.GEOFENCE_MAX_ACCURACY_METERS.
+
+# Largest page allowed for ?limit= on attendance history
+MAX_ATTENDANCE_PAGE_SIZE = 1000
 
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -65,24 +73,198 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return earth_radius * c
 
 
+class GeofenceError(Exception):
+    """A check-in rejected by GPS / geofence validation."""
+
+    def __init__(self, error, detail, http_status=status.HTTP_400_BAD_REQUEST, **extra):
+        super().__init__(error)
+        self.http_status = http_status
+        self.payload = {"error": error, "detail": detail, **extra}
+
+
+def parse_gps(data, required):
+    """
+    Read latitude / longitude / accuracy (metres, optional) from the request.
+
+    Returns (latitude, longitude, accuracy) - accuracy may be None.
+    Returns None when coordinates are missing and not required.
+    Raises GeofenceError when they are required but missing, or invalid.
+    """
+
+    raw_latitude = data.get('latitude')
+    raw_longitude = data.get('longitude')
+
+    if raw_latitude in (None, '') or raw_longitude in (None, ''):
+        if required:
+            raise GeofenceError(
+                "Current location is required",
+                "Latitude and longitude must be provided."
+            )
+        return None
+
+    try:
+        latitude = float(raw_latitude)
+        longitude = float(raw_longitude)
+        raw_accuracy = data.get('accuracy')
+        accuracy = None if raw_accuracy in (None, '') else float(raw_accuracy)
+
+    except (TypeError, ValueError):
+        raise GeofenceError(
+            "Invalid location coordinates",
+            "Latitude, longitude and accuracy must be numbers."
+        )
+
+    if (
+        not (isfinite(latitude) and isfinite(longitude))
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+        or (latitude == 0 and longitude == 0)
+    ):
+        raise GeofenceError(
+            "Invalid location coordinates",
+            "The GPS position is not valid. Please enable location and try again."
+        )
+
+    if accuracy is not None and (not isfinite(accuracy) or accuracy < 0):
+        raise GeofenceError(
+            "Invalid location coordinates",
+            "GPS accuracy must be a positive number of metres."
+        )
+
+    return latitude, longitude, accuracy
+
+
+def find_office(employee, latitude, longitude):
+    """
+    Match a GPS position to the office the employee should be at.
+
+    Uses the employee's assigned office. If none is assigned, picks the
+    organisation's location the position is most inside of
+    (smallest distance minus that location's radius).
+
+    Returns (location, distance_in_meters), or (None, None) when the
+    organisation has no locations.
+    """
+
+    if employee.office_location:
+        candidates = [employee.office_location]
+    else:
+        candidates = Location.objects.filter(
+            org_id=employee.organisation_id
+        )
+
+    best_location, best_distance = None, None
+
+    for location in candidates:
+        distance = calculate_distance(
+            latitude,
+            longitude,
+            location.latitude,
+            location.longitude
+        )
+
+        if (
+            best_location is None
+            or distance - location.radius_meters
+            < best_distance - best_location.radius_meters
+        ):
+            best_location, best_distance = location, distance
+
+    return best_location, best_distance
+
+
+def record_check_out_location(attendance, employee, data):
+    """
+    Store the GPS sent with a check-out and flag it inside / outside.
+    Check-out is never blocked: missing or unusable GPS is stored as 'unknown'.
+    """
+
+    try:
+        gps = parse_gps(data, required=False)
+    except GeofenceError:
+        gps = None
+
+    if not gps:
+        attendance.check_out_location_status = 'unknown'
+        return
+
+    latitude, longitude, accuracy = gps
+
+    attendance.check_out_latitude = latitude
+    attendance.check_out_longitude = longitude
+    attendance.check_out_accuracy = accuracy
+
+    # Compare against the office used at check-in when known
+    office = attendance.check_in_location
+
+    if office:
+        distance = calculate_distance(
+            latitude,
+            longitude,
+            office.latitude,
+            office.longitude
+        )
+    else:
+        office, distance = find_office(employee, latitude, longitude)
+
+    if not office:
+        attendance.check_out_location_status = 'unknown'
+        return
+
+    attendance.check_out_distance = distance
+
+    if (
+        accuracy is not None
+        and accuracy > settings.GEOFENCE_MAX_ACCURACY_METERS
+    ):
+        attendance.check_out_location_status = 'unknown'
+
+    elif distance <= office.radius_meters:
+        attendance.check_out_location_status = 'inside'
+
+    else:
+        attendance.check_out_location_status = 'outside'
+
+
+# ============================================================
+# QUERY HELPERS
+# ============================================================
+
+# Everything UserProfileSerializer / AttendanceSerializer / attendance
+# status checks read from an employee, loaded in one JOIN query.
+EMPLOYEE_RELATED = (
+    "user",
+    "organisation",
+    "department",
+    "designation",
+    "shift",
+    "office_location",
+)
+
+
+def get_employee_profile(user):
+    """
+    Load the employee profile for an auth user with all related rows.
+    Raises Customuser.DoesNotExist if the user has no employee profile.
+    """
+    return Customuser.objects.select_related(*EMPLOYEE_RELATED).get(user=user)
+
+
 # ============================================================
 # SIGNUP
 # ============================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def signup_view(request):
 
     # NOTE: request.data is intentionally NOT logged (contains passwords)
-    print("--- SIGNUP ATTEMPT START ---")
-    print(f"Method: {request.method}")
-    sys.stdout.flush()
-
     serializer = Signupserializer(data=request.data)
 
     # FIRST check validation
     if not serializer.is_valid():
-        print("VALIDATION ERROR:", serializer.errors)
+        logger.info("Employee signup validation error: %s", serializer.errors)
         return Response(serializer.errors, status=400)
 
     # THEN try saving
@@ -111,8 +293,7 @@ def signup_view(request):
         }, status=201)
 
     except Exception as e:
-        print("SAVE ERROR:", str(e))
-        traceback.print_exc()
+        logger.exception("Employee signup failed")
 
         return Response(
             {"error": str(e)},
@@ -138,8 +319,7 @@ def list_users(request):
     elif org_id in [None, '', 'undefined', 'null']:
         org_id = getattr(request.user, 'org_id', None)
 
-    print(f"DEBUG LIST USERS (FIXED): Final Org ID used={org_id}")
-    sys.stdout.flush()
+    logger.debug("list_users: org_id=%s", org_id)
 
     # If the requester is an organization or they are requesting a list for an org
     if (
@@ -153,6 +333,12 @@ def list_users(request):
                 organisation_id=org_id
             ).exclude(
                 user__is_organization=True
+            ).select_related(
+                "user",
+                "department",
+                "designation",
+                "shift",
+                "office_location",
             )
 
             serializer = EmployeeListSerializer(
@@ -169,14 +355,17 @@ def list_users(request):
             )
 
     # Fallback for individual user profile if needed
-    if not hasattr(request.user, 'employee'):
+    try:
+        employee = get_employee_profile(request.user)
+
+    except Customuser.DoesNotExist:
         return Response(
             {'error': 'Employee profile not found'},
             status=status.HTTP_404_NOT_FOUND
         )
 
     serializer = UserProfileSerializer(
-        request.user.employee
+        employee
     )
 
     return Response({
@@ -191,6 +380,7 @@ def list_users(request):
 # ============================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def login_view_employee(request):
 
@@ -210,7 +400,7 @@ def login_view_employee(request):
 
         else:
             profile_data = UserProfileSerializer(
-                user.employee
+                get_employee_profile(user)
             ).data
 
         return Response({
@@ -235,6 +425,7 @@ def login_view_employee(request):
 # ============================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def member_login_view(request):
 
@@ -267,9 +458,7 @@ def member_login_view(request):
         )
 
         # Find the associated employee profile
-        employee = Customuser.objects.get(
-            user=auth_user
-        )
+        employee = get_employee_profile(auth_user)
 
         # Check member_password
         if not employee.member_password:
@@ -346,7 +535,7 @@ def member_login_view(request):
         )
 
     except Exception as e:
-        print(f"ERROR: {str(e)}")
+        logger.exception("Member login failed")
         return Response(
             {"error": "Internal server error"},
             status=500
@@ -358,6 +547,7 @@ def member_login_view(request):
 # ============================================================
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def check_registration_status(request):
 
@@ -365,7 +555,6 @@ def check_registration_status(request):
 
     mobile_number = request.data.get('mobile_number')
 
-    print(f"DEBUG: check_registration_status received: {mobile_number}")
 
     if not mobile_number:
         return Response(
@@ -413,7 +602,7 @@ def check_registration_status(request):
         }, status=404)
 
     except Exception as e:
-        print(f"ERROR in check_registration_status: {str(e)}")
+        logger.exception("check_registration_status failed")
         return Response(
             {"error": "Internal server error"},
             status=500
@@ -432,9 +621,10 @@ def update_user(request, user_id):
 
     current_org_id = request.user.pk
 
-    print(
-        f"DEBUG UPDATE: user_id={user_id}, "
-        f"requester_pk={current_org_id}"
+    logger.debug(
+        "update_user: user_id=%s requester_pk=%s",
+        user_id,
+        current_org_id
     )
 
     try:
@@ -565,8 +755,7 @@ def update_user(request, user_id):
         )
 
     except Exception as e:
-        print(f"ERROR UPDATE USER: {str(e)}")
-        traceback.print_exc()
+        logger.exception("update_user failed for user_id=%s", user_id)
 
         return Response(
             {"error": str(e)},
@@ -585,9 +774,10 @@ def delete_user(request, user_id):
 
     current_org_id = request.user.pk
 
-    print(
-        f"DEBUG DELETE: user_id={user_id}, "
-        f"requester_pk={current_org_id}"
+    logger.debug(
+        "delete_user: user_id=%s requester_pk=%s",
+        user_id,
+        current_org_id
     )
 
     try:
@@ -603,11 +793,6 @@ def delete_user(request, user_id):
             )
 
         # Security check
-        print(
-            f"SECURITY CHECK: Employee's Org ID="
-            f"{employee.organisation_id}, "
-            f"Requester's User ID={request.user.pk}"
-        )
 
         is_owner = (
             employee.organisation_id
@@ -672,9 +857,11 @@ def employee_details(request):
 
     else:
         try:
-            profile_data = UserProfileSerializer(user.employee).data
+            profile_data = UserProfileSerializer(
+                get_employee_profile(user)
+            ).data
 
-        except AttributeError:
+        except Customuser.DoesNotExist:
             return Response(
                 {'error': 'Employee profile not found'},
                 status=status.HTTP_404_NOT_FOUND
@@ -729,21 +916,21 @@ def mark_attendance(request):
     # Allow manual marking by organization admins
     employee_id = request.data.get('employee_id')
 
-    print(
-        "DEBUG AUTH USER:",
-        request.user,
-        "ID:",
-        request.user.pk
-    )
+    # Manual (admin) marking skips GPS + face checks, so it is only allowed
+    # for organisation admins. An employee sending employee_id is treated as
+    # a normal self check-in and goes through all checks.
+    is_manual = bool(employee_id) and request.user.is_organization
 
     # --------------------------------------------------------
     # FIND EMPLOYEE
     # --------------------------------------------------------
 
-    if employee_id and request.user.is_organization:
+    if is_manual:
 
         try:
-            employee_profile = Customuser.objects.get(
+            employee_profile = Customuser.objects.select_related(
+                *EMPLOYEE_RELATED
+            ).get(
                 pk=employee_id,
                 organisation=request.user
             )
@@ -757,9 +944,9 @@ def mark_attendance(request):
     else:
 
         try:
-            employee_profile = request.user.employee
+            employee_profile = get_employee_profile(request.user)
 
-        except AttributeError:
+        except Customuser.DoesNotExist:
             return Response(
                 {'error': 'Employee profile not found'},
                 status=status.HTTP_404_NOT_FOUND
@@ -767,18 +954,43 @@ def mark_attendance(request):
 
     # --------------------------------------------------------
     # CHECK EXISTING OPEN ATTENDANCE
+    #
+    # action = "checkin"  -> never checks out; a repeated check-in
+    #                        returns the already-open record
+    # action = "checkout" -> only checks out
+    # no action           -> legacy toggle (check out if open, else check in)
     # --------------------------------------------------------
 
-    active_attendance = Attendance.objects.filter(
-        employee=employee_profile,
-        check_out__isnull=True
-    ).first()
+    action = request.data.get('action')
+
+    with transaction.atomic():
+
+        # Lock the open record so two parallel requests cannot both close it
+        active_attendance = Attendance.objects.select_for_update().filter(
+            employee=employee_profile,
+            check_out__isnull=True
+        ).first()
+
+        if active_attendance and action != 'checkin':
+
+            # Handle check-out (never blocked by location, only flagged)
+            active_attendance.check_out = timezone.now()
+
+            if is_manual:
+                active_attendance.check_out_location_status = 'manual'
+            else:
+                record_check_out_location(
+                    active_attendance,
+                    employee_profile,
+                    request.data
+                )
+
+            active_attendance.save()
 
     if active_attendance:
 
-        # Handle check-out
-        active_attendance.check_out = timezone.now()
-        active_attendance.save()
+        # Reuse the already-loaded employee for serialization
+        active_attendance.employee = employee_profile
 
         serializer = AttendanceSerializer(
             active_attendance
@@ -794,7 +1006,7 @@ def mark_attendance(request):
     # check-in, do NOT create a new check-in.
     # --------------------------------------------------------
 
-    if request.data.get('action') == 'checkout':
+    if action == 'checkout':
         return Response(
             {
                 "error": "No active session",
@@ -807,159 +1019,145 @@ def mark_attendance(request):
     # CHECK-IN
     # --------------------------------------------------------
 
-    face_status = request.data.get(
-        'face_status',
-        'verified'
-    )
+    if is_manual:
 
-    # Employee self-marking requires successful face verification
-    if not employee_id and face_status != 'verified':
-        return Response(
-            {
-                "error": "Face verification failed",
-                "detail": "Attendance can be marked only after face verification."
-            },
-            status=status.HTTP_403_FORBIDDEN
-        )
-
-    # Default location status
-    location_status = 'inside'
-
-    # --------------------------------------------------------
-    # GEO VALIDATION
-    #
-    # Employee attendance:
-    #   Get current GPS coordinates from frontend
-    #   Compare with organization's saved location.
-    #
-    # Organization admin manual attendance:
-    #   Keep existing manual behavior.
-    # --------------------------------------------------------
-
-    if not employee_id:
-
-        latitude = request.data.get('latitude')
-        longitude = request.data.get('longitude')
-
-        # GPS coordinates are required for employee attendance
-        if latitude is None or longitude is None:
-
-            return Response(
-                {
-                    "error": "Current location is required",
-                    "detail": "Latitude and longitude must be provided."
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        try:
-
-            # Employee's assigned office location (set by the org admin
-            # in the Employees page). Fall back to the organization's
-            # first saved location if none is assigned.
-            office_location = employee_profile.office_location
-
-            if not office_location:
-                office_location = Location.objects.filter(
-                    org_id=employee_profile.organisation_id
-                ).first()
-
-            if not office_location:
-
-                return Response(
-                    {
-                        "error": "Office location not configured",
-                        "detail": "Admin must add an office location and assign it to this employee."
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Calculate distance between employee and office
-            distance = calculate_distance(
-                latitude,
-                longitude,
-                office_location.latitude,
-                office_location.longitude
-            )
-
-            print(f"DEBUG GEO: Employee location=({latitude}, {longitude})")
-
-            print(
-                f"DEBUG GEO: Office location="
-                f"({office_location.latitude}, "
-                f"{office_location.longitude})"
-            )
-
-            print(f"DEBUG GEO: Distance={distance:.2f} meters")
-
-            # Backend decides inside/outside.
-            # Outside the office radius => attendance is NOT marked.
-            if distance > GEOFENCE_RADIUS_METERS:
-                return Response(
-                    {
-                        "error": "Location mismatch",
-                        "detail": (
-                            f"You are {int(distance)}m away from the office. "
-                            f"Allowed radius: {GEOFENCE_RADIUS_METERS}m."
-                        ),
-                        "distance_meters": round(distance, 2),
-                        "allowed_radius_meters": GEOFENCE_RADIUS_METERS,
-                    },
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            location_status = 'inside'
-
-        except (TypeError, ValueError):
-
-            return Response(
-                {"error": "Invalid location coordinates"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        except Exception as e:
-
-            print(f"ERROR GEO VALIDATION: {str(e)}")
-
-            return Response(
-                {"error": "Unable to validate location"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        # Organisation admin manual attendance: no GPS / face check.
+        # Recorded as a manual entry; location/face values sent by the
+        # client are not trusted.
+        face_status = 'skipped'
+        location_status = 'manual'
+        gps = None
+        office_location, distance = None, None
 
     else:
 
-        # Organization admin manual attendance
-        location_status = request.data.get(
-            'location_status',
-            'inside'
+        face_status = request.data.get(
+            'face_status',
+            'verified'
         )
+
+        # Employee self-marking requires successful face verification
+        if face_status != 'verified':
+            return Response(
+                {
+                    "error": "Face verification failed",
+                    "detail": "Attendance can be marked only after face verification."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # ----------------------------------------------------
+        # GEO VALIDATION (server is the final authority)
+        # ----------------------------------------------------
+
+        try:
+            gps = parse_gps(request.data, required=True)
+            latitude, longitude, accuracy = gps
+
+            max_accuracy = settings.GEOFENCE_MAX_ACCURACY_METERS
+
+            if accuracy is not None and accuracy > max_accuracy:
+                raise GeofenceError(
+                    "GPS accuracy too low",
+                    (
+                        f"Your location is only accurate to about {int(accuracy)}m "
+                        f"(needs {max_accuracy}m or better). Turn on precise "
+                        "location, move near a window or outdoors, and try again."
+                    ),
+                    accuracy_meters=round(accuracy, 1),
+                    max_accuracy_meters=max_accuracy,
+                )
+
+            office_location, distance = find_office(
+                employee_profile,
+                latitude,
+                longitude
+            )
+
+            if not office_location:
+                raise GeofenceError(
+                    "Office location not configured",
+                    "Admin must add an office location for your organisation."
+                )
+
+            logger.debug(
+                "Geofence: employee=(%s, %s) +/-%sm office=%s (%s, %s) r=%sm distance=%.2fm",
+                latitude,
+                longitude,
+                accuracy,
+                office_location.pk,
+                office_location.latitude,
+                office_location.longitude,
+                office_location.radius_meters,
+                distance
+            )
+
+            # Outside the office radius => attendance is NOT marked.
+            if distance > office_location.radius_meters:
+                raise GeofenceError(
+                    "Location mismatch",
+                    (
+                        f"You are {int(distance)}m away from "
+                        f"{office_location.location_name}. "
+                        f"Allowed radius: {office_location.radius_meters}m."
+                    ),
+                    http_status=status.HTTP_403_FORBIDDEN,
+                    distance_meters=round(distance, 2),
+                    allowed_radius_meters=office_location.radius_meters,
+                    office_location=office_location.location_name,
+                )
+
+        except GeofenceError as e:
+            return Response(e.payload, status=e.http_status)
+
+        location_status = 'inside'
 
     # --------------------------------------------------------
     # ATTENDANCE STATUS
     # --------------------------------------------------------
 
-    if face_status == 'failed':
-        attendance_status = 'FAILED_VERIFICATION'
-
-    elif location_status == 'outside':
-        attendance_status = 'Late'
-
-    else:
-        attendance_status = calculate_attendance_status(
-            employee_profile
-        )
+    attendance_status = calculate_attendance_status(
+        employee_profile
+    )
 
     # --------------------------------------------------------
     # CREATE ATTENDANCE
     # --------------------------------------------------------
 
-    attendance = Attendance.objects.create(
-        employee=employee_profile,
-        check_in=timezone.now(),
-        status=attendance_status,
-        location_status=location_status,
-        face_status=face_status
-    )
+    try:
+        with transaction.atomic():
+            attendance = Attendance.objects.create(
+                employee=employee_profile,
+                check_in=timezone.now(),
+                status=attendance_status,
+                location_status=location_status,
+                face_status=face_status,
+                source='manual' if is_manual else 'self',
+                marked_by=request.user if is_manual else None,
+                check_in_latitude=gps[0] if gps else None,
+                check_in_longitude=gps[1] if gps else None,
+                check_in_accuracy=gps[2] if gps else None,
+                check_in_distance=distance,
+                check_in_location=office_location,
+            )
+
+    except IntegrityError:
+
+        # A parallel request already checked this employee in
+        # (one_open_attendance_per_employee constraint) - return that record.
+        attendance = Attendance.objects.filter(
+            employee=employee_profile,
+            check_out__isnull=True
+        ).first()
+
+        if not attendance:
+            raise
+
+        attendance.employee = employee_profile
+
+        return Response(
+            AttendanceSerializer(attendance).data
+        )
 
     serializer = AttendanceSerializer(
         attendance
@@ -999,8 +1197,73 @@ def employee_attendance(request, employee_id=None):
     else:
 
         # Employee viewing their own attendance
+        # (employee PK is the auth user's PK, so no extra lookup is needed)
         attendances = Attendance.objects.filter(
-            employee=request.user.employee
+            employee_id=request.user.pk
+        )
+
+    # AttendanceSerializer reads employee name and employee.user.org_id
+    attendances = attendances.select_related(
+        "employee",
+        "employee__user"
+    )
+
+    # --------------------------------------------------------
+    # OPTIONAL FILTERS / PAGING
+    # ?from=YYYY-MM-DD&to=YYYY-MM-DD  (local dates, inclusive)
+    # ?limit=N&offset=M               (newest first)
+    # Without these params the full history is returned, as before.
+    # --------------------------------------------------------
+
+    params = request.query_params
+
+    try:
+        if params.get('from'):
+            from_date = parse_date(params['from'])
+            attendances = attendances.filter(
+                check_in__gte=timezone.make_aware(
+                    datetime.datetime.combine(from_date, datetime.time.min)
+                )
+            )
+
+        if params.get('to'):
+            to_date = parse_date(params['to'])
+            attendances = attendances.filter(
+                check_in__lt=timezone.make_aware(
+                    datetime.datetime.combine(
+                        to_date + datetime.timedelta(days=1),
+                        datetime.time.min
+                    )
+                )
+            )
+
+        offset = int(params.get('offset', 0))
+        limit = params.get('limit')
+
+        if offset < 0:
+            raise ValueError
+
+        if limit is not None:
+            limit = int(limit)
+
+            if not 1 <= limit <= MAX_ATTENDANCE_PAGE_SIZE:
+                raise ValueError
+
+            attendances = attendances[offset:offset + limit]
+
+        elif offset:
+            attendances = attendances[offset:]
+
+    except (TypeError, ValueError):
+        return Response(
+            {
+                "error": "Invalid query parameters",
+                "detail": (
+                    "from/to must be YYYY-MM-DD, offset >= 0, "
+                    f"limit between 1 and {MAX_ATTENDANCE_PAGE_SIZE}."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST
         )
 
     serializer = AttendanceSerializer(

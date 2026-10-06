@@ -28,7 +28,7 @@ SECRET_KEY = os.getenv(
     'django-insecure-fallback-key-for-dev-only'
 )
 
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.getenv(
     'ALLOWED_HOSTS',
@@ -120,11 +120,9 @@ DATABASES = {
         'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
         'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
         'PORT': os.getenv('POSTGRES_PORT', '5432'),
-    },
-
-    'sqlite_source': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        # Reuse connections across requests instead of reconnecting every time
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),
+        'CONN_HEALTH_CHECKS': True,
     },
 }
 
@@ -133,11 +131,9 @@ DATABASES = {
 # ============================================================
 
 REST_FRAMEWORK = {
+    # The frontend only sends "Authorization: Bearer <jwt>"
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.TokenAuthentication',
-        'rest_framework.authentication.BasicAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -192,6 +188,10 @@ STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Serve /media/ through Django (also when DEBUG is False).
+# Set to False when nginx / a CDN / S3 serves media files instead.
+SERVE_MEDIA = os.getenv('SERVE_MEDIA', 'True') == 'True'
+
 
 # ============================================================
 # Default primary key
@@ -240,6 +240,16 @@ AWS_DEFAULT_REGION = os.getenv(
 
 
 # ============================================================
+# Geofencing (attendance check-in / check-out)
+# ============================================================
+
+# Reject GPS readings less precise than this (browser coords.accuracy, metres)
+GEOFENCE_MAX_ACCURACY_METERS = int(
+    os.getenv('GEOFENCE_MAX_ACCURACY_METERS', '100')
+)
+
+
+# ============================================================
 # Email Configuration
 # ============================================================
 
@@ -250,3 +260,57 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'resend'
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = 'onboarding@resend.dev'
+
+
+# ============================================================
+# Logging
+# ============================================================
+
+# App log level: DEBUG locally, INFO in production (override with LOG_LEVEL)
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'DEBUG' if DEBUG else 'INFO')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '{asctime} {levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'standard',
+        },
+    },
+    # Third-party libraries (boto3, urllib3, ...) only log warnings and above
+    'root': {
+        'handlers': ['console'],
+        'level': 'WARNING',
+    },
+    'loggers': {
+        # Django's own logs (4xx/5xx request warnings, errors)
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        **{
+            app: {
+                'handlers': ['console'],
+                'level': LOG_LEVEL,
+                'propagate': False,
+            }
+            for app in (
+                'employees',
+                'departments',
+                'designations',
+                'locations',
+                'organisation',
+                'shifts',
+                'face_auth',
+            )
+        },
+    },
+}

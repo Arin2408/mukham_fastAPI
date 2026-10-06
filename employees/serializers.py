@@ -209,10 +209,7 @@ class Loginemployeeserializer(serializers.ModelSerializer):
         ).first()
 
         if not user:
-            print(f"Login Failed: User with mobile {mobile_number} (normalized: {normalize_mobile(mobile_number)}) not found.")
             raise serializers.ValidationError("Invalid mobile number")
-
-        print(f"Login Attempt: Found user {user.name} ({user.mobile_number})")
 
         # 🔐 Check password
         if not user.check_password(password):
@@ -284,9 +281,23 @@ class AttendanceSerializer(serializers.ModelSerializer):
             'check_in',
             'check_out',
             'status',
-            'hours_worked'
+            'hours_worked',
+            # Geofence / audit info
+            'source',
+            'location_status',
+            'check_in_distance',
+            'check_out_location_status',
+            'check_out_distance'
         ]
-        read_only_fields = ['status', 'hours_worked']
+        read_only_fields = [
+            'status',
+            'hours_worked',
+            'source',
+            'location_status',
+            'check_in_distance',
+            'check_out_location_status',
+            'check_out_distance'
+        ]
     
     def get_employee_name(self, obj):
         return f"{obj.employee.first_name} {obj.employee.last_name}"
