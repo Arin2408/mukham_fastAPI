@@ -13,7 +13,7 @@ __pycache__/
 venv/
 env/
 ENV/
-
+../.venv-fastapi/
 # =========================
 # Environment / Secrets
 # =========================
