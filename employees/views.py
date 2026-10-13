@@ -888,11 +888,19 @@ def calculate_attendance_status(employee):
     # matches the shift start time, which is stored in local time.
     now = timezone.localtime(timezone.now())
 
-    shift_start = now.replace(
+    today_start = now.replace(
         hour=employee.shift.shift_start_time.hour,
         minute=employee.shift.shift_start_time.minute,
         second=0,
         microsecond=0
+    )
+
+    # Use the shift start (yesterday / today / tomorrow) closest to now, so
+    # night shifts that cross midnight (e.g. 20:00 -> 04:00) are judged correctly:
+    # a 00:30 check-in for a 20:00 shift is Late, not Early.
+    shift_start = min(
+        (today_start + datetime.timedelta(days=d) for d in (-1, 0, 1)),
+        key=lambda s: abs(now - s)
     )
 
     if now < shift_start - datetime.timedelta(minutes=15):
