@@ -14,4 +14,3 @@ docker-compose.yml
 Dockerfile
 media
 private_media
-face/venv

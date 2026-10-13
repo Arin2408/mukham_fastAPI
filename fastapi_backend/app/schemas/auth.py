@@ -11,6 +11,9 @@ class LoginRequest(BaseModel):
         min_length=1,
     )
 
+    # Optional label for the signed-in device, e.g. "Pixel 8" (mobile app).
+    device_name: str | None = Field(default=None, max_length=100)
+
 
 class TokenResponse(BaseModel):
     access: str

@@ -387,7 +387,7 @@ def get_liveness_result(
                             "This face is already registered "
                             "to another employee account."
                         ),
-                        "code": "DUPLICATE_FACE",
+                        "code": "duplicate_face",
                     },
                 }
 
@@ -672,7 +672,7 @@ def register_face_image(
             "status_code": 400,
             "body": {
                 "error": "This face is already registered to another employee account.",
-                "code": "DUPLICATE_FACE",
+                "code": "duplicate_face",
             },
         }
 

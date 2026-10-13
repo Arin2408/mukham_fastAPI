@@ -47,4 +47,4 @@ def login(
             detail="Invalid mobile number or password",
         )
 
-    return create_tokens(user)
+    return create_tokens(db, user, data.device_name)

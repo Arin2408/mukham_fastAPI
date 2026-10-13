@@ -562,14 +562,11 @@ def delete_employee(
     employee: Employee,
 ) -> None:
     """
-    Delete an employee and everything Django's on_delete=CASCADE removed
-    (attendance, face data). The database foreign keys have no delete rule,
-    so these rows are removed explicitly. Direct reports move up to the
-    deleted employee's own manager so nobody is left without one.
-    Tasks are removed by the database (ON DELETE CASCADE).
+    Delete an employee with their attendance and face data. The database
+    foreign keys have no delete rule, so these rows are removed explicitly.
+    Direct reports move up to the deleted employee's own manager so nobody
+    is left without one. Tasks are removed by the database (ON DELETE CASCADE).
     """
-    from sqlalchemy import text
-
     from app.models.attendance import Attendance
     from app.models.face import EmployeeFaceData
 
@@ -605,17 +602,6 @@ def delete_employee(
             if face_record is not None:
                 face_key = face_record.face_image_key or None
                 db.delete(face_record)
-
-            # Django-only tables that reference the auth user.
-            for table, column in (
-                ("authtoken_token", "user_id"),
-                ("organisation_customuser_groups", "customuser_id"),
-                ("organisation_customuser_user_permissions", "customuser_id"),
-            ):
-                db.execute(
-                    text(f"DELETE FROM {table} WHERE {column} = :uid"),
-                    {"uid": user.org_id},
-                )
 
         db.delete(employee)
         db.flush()

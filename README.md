@@ -1,8 +1,8 @@
 # Mukham backend
 
-FastAPI backend for Mukham, on PostgreSQL. The Django project in this repo
-creates the base database tables; the API itself is served by FastAPI
-(`fastapi_backend/`) on port 8002.
+FastAPI backend for Mukham, on PostgreSQL. The app lives in
+`fastapi_backend/` and serves the API on port 8002. Alembic owns the whole
+database schema.
 
 ## Requirements
 
@@ -11,20 +11,19 @@ creates the base database tables; the API itself is served by FastAPI
 
 ## Setup
 
-1. Create and activate a virtual environment, then install both
-   dependency files (Django is needed for the base migrations):
+1. Create and activate a virtual environment, then install dependencies:
 
    ```
    python -m venv .venv
    source .venv/bin/activate
-   pip install -r requirements.txt -r requirements-fastapi.txt
+   pip install -r requirements.txt
    ```
 
 2. Create `.env` in this folder:
 
    | Variable | Example | Notes |
    | --- | --- | --- |
-   | `SECRET_KEY` | long random string | Signs JWTs; shared by Django and FastAPI |
+   | `SECRET_KEY` | long random string | Signs JWTs and password-reset tokens |
    | `DEBUG` | `False` | `True` also enables the `/api/v1/debug/*` routes |
    | `POSTGRES_DB` | `mukham_db` | |
    | `POSTGRES_USER` | `postgres` | |
@@ -36,6 +35,7 @@ creates the base database tables; the API itself is served by FastAPI
    | `MEDIA_S3_BUCKET` | | Optional. Private S3 bucket for photos and face images; unset = local folders |
    | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated |
    | `EMAIL_HOST_PASSWORD` | | Resend SMTP, for password-reset emails |
+   | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | How long a signed-in device may stay idle |
 
 3. Create the database user and database. With Homebrew PostgreSQL the
    default superuser is your macOS user, so `postgres` may not exist yet:
@@ -45,10 +45,9 @@ creates the base database tables; the API itself is served by FastAPI
    createdb -O postgres mukham_db
    ```
 
-4. Create the tables. Django migrations first, then Alembic:
+4. Create the tables:
 
    ```
-   python manage.py migrate
    cd fastapi_backend
    alembic upgrade head
    ```
@@ -62,6 +61,47 @@ creates the base database tables; the API itself is served by FastAPI
 
    API docs: http://127.0.0.1:8002/docs. Database check:
    http://127.0.0.1:8002/api/v1/health/db
+
+## API conventions
+
+**Versioning.** Every route lives under `/api/v1`. Changes to `/api/v1` are
+additive only: new routes, new optional request fields, new response
+fields. Anything that would break an existing client (renaming or removing
+a field, changing a type or a status code) goes to `/api/v2` instead.
+
+**Errors.** Every 4xx and 5xx response has two top-level fields:
+
+```
+{"code": "outside_geofence", "message": "You are outside the permitted attendance location.", "detail": {...}}
+```
+
+`code` is stable and meant for app logic; `message` is safe to show to the
+user. Older fields (`detail`, and `error` on face routes) are kept for the
+web app. Codes:
+
+| Code | Status | When |
+| --- | --- | --- |
+| `bad_request` | 400 | Generic invalid request |
+| `unauthorized` | 401 | Missing, invalid or expired token; wrong password |
+| `forbidden` | 403 | Signed in, but not allowed |
+| `not_found` | 404 | Record does not exist |
+| `conflict` | 409 | E.g. a liveness session already used |
+| `validation_error` | 422 | Request body or query failed validation; `detail` lists each field |
+| `internal_error` | 500 | Unexpected server error; details are logged, never returned |
+| `face_verification_required` | 428 | `/attendance/mark` check-in without a valid `face_token` |
+| `outside_geofence` | 403 | Check-in too far from the office; `detail` has `distance_meters`, `allowed_radius_meters`, `office_location` |
+| `no_open_attendance` | 404 | Check-out with no open check-in |
+| `invalid_location` | 400 | Invalid GPS data or attendance action, or the organisation has no office location |
+| `duplicate_face` | 400 | Face already enrolled for another employee |
+
+**Sessions.** Each sign-in (`/org/login`, `/member/login/complete`,
+`/auth/login`) starts a session for that device; send an optional
+`device_name` to label it. The access token lasts 60 minutes. The refresh
+token lasts `REFRESH_TOKEN_EXPIRE_DAYS` and works once:
+`POST /auth/refresh` returns a new access and refresh token. Presenting an
+already-used refresh token signs that device out (a copied token is
+assumed), so a client must not refresh twice in parallel.
+`POST /auth/logout` with `{"refresh": ...}` signs the device out.
 
 ## File storage
 
@@ -92,7 +132,7 @@ starting a new version:
 
 ```
 docker build -t mukham-api .
-docker run --rm --env-file .env mukham-api sh -c "python manage.py migrate && cd fastapi_backend && alembic upgrade head"
+docker run --rm --env-file .env mukham-api alembic upgrade head
 docker run --env-file .env -p 8002:8002 mukham-api
 ```
 
@@ -101,7 +141,11 @@ Use S3 storage (`MEDIA_S3_BUCKET`) in containers; local `media/` and
 
 ## Database changes
 
-Base tables come from the Django apps' migrations. Newer tables (tasks,
-security tracking) are Alembic migrations in `fastapi_backend/migrations/`.
-A change to a table a Django app defines goes in that app's migrations;
-everything else goes in Alembic.
+Every schema change is a hand-written Alembic migration in
+`fastapi_backend/migrations/versions/`. `0000_baseline` creates the core
+tables; their names (`organisation_customuser`, `employees_customuser`, …)
+and constraint names come from the project's Django days and are kept as-is.
+Do not use `--autogenerate`: it would try to rename them to match the models.
+
+A database created before Django was removed upgrades in place:
+`alembic upgrade head` drops the Django-only tables (`0003_drop_django_tables`).

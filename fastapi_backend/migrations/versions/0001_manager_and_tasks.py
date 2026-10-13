@@ -1,7 +1,7 @@
 """Employee reporting manager and task tracking
 
 Revision ID: 0001_manager_and_tasks
-Revises:
+Revises: 0000_baseline
 Create Date: 2026-10-09
 
 - employees_customuser.manager_id: the employee this employee reports to.
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 
 revision = "0001_manager_and_tasks"
-down_revision = None
+down_revision = "0000_baseline"
 branch_labels = None
 depends_on = None
 

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from datetime import date
+from app.core.errors import ApiError
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.employee import Employee
@@ -188,16 +189,18 @@ def attendance_mark(
 
     except FaceVerificationRequired as exc:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
-            detail=str(exc),
+        raise ApiError(
+            status.HTTP_428_PRECONDITION_REQUIRED,
+            "face_verification_required",
+            str(exc),
         )
 
     except GeofenceRejectedError as exc:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
+        raise ApiError(
+            status.HTTP_403_FORBIDDEN,
+            "outside_geofence",
+            {
                 "message": str(exc),
                 "distance_meters": round(exc.distance_meters, 2),
                 "allowed_radius_meters": exc.location.radius_meters,
@@ -207,16 +210,18 @@ def attendance_mark(
 
     except NoOpenAttendanceError as exc:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
+        raise ApiError(
+            status.HTTP_404_NOT_FOUND,
+            "no_open_attendance",
+            str(exc),
         )
 
     except (LocationValidationError, LocationNotFoundError, ValueError) as exc:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+        raise ApiError(
+            status.HTTP_400_BAD_REQUEST,
+            "invalid_location",
+            str(exc),
         )
 
     return AttendanceMarkResponse(

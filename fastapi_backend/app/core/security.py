@@ -24,7 +24,6 @@ pwd_context = CryptContext(
 JWT_ALGORITHM = "HS256"
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
-REFRESH_TOKEN_EXPIRE_DAYS = 1
 
 
 def verify_password(
@@ -95,17 +94,22 @@ def create_member_pre_auth_token(mobile_number: str) -> str:
     )
 def create_refresh_token(
     mobile_number: str,
+    family_id: str,
 ) -> str:
-    """Create a refresh JWT with a unique identifier for rotation."""
+    """
+    Create a refresh JWT. `jti` identifies this token for rotation;
+    `fam` is the signed-in device's token family.
+    """
     now = datetime.now(timezone.utc)
 
     payload = {
         "token_type": "refresh",
         "mobile_number": mobile_number,
         "jti": uuid.uuid4().hex,
+        "fam": family_id,
         "iat": now,
         "exp": now + timedelta(
-            days=REFRESH_TOKEN_EXPIRE_DAYS
+            days=settings.refresh_token_expire_days
         ),
     }
 

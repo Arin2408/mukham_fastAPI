@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from app.core.errors import error_response
 from app.db.session import get_db
 from app.dependencies.auth import (
     get_current_member_pre_auth,
@@ -33,6 +34,13 @@ from app.services.face_service import (
 )
 
 router = APIRouter()
+
+
+def _service_response(status_code: int, body: dict) -> JSONResponse:
+    """Return a face-service result; errors get the shared `code`/`message`."""
+    if status_code >= 400:
+        return error_response(status_code, body)
+    return JSONResponse(status_code=status_code, content=body)
 
 
 def _require_employee(current_user: User) -> None:
@@ -123,10 +131,7 @@ def create_liveness_session_endpoint(
     result = create_liveness_session()
 
     if result["status_code"] != 200:
-        return JSONResponse(
-            status_code=result["status_code"],
-            content=result["body"],
-        )
+        return _service_response(result["status_code"], result["body"])
 
     session_id = result["body"]["session_id"]
 
@@ -250,10 +255,7 @@ def get_liveness_result_endpoint(
                 detail="Could not record face verification",
             )
 
-    return JSONResponse(
-        status_code=status_code,
-        content=body,
-    )
+    return _service_response(status_code, body)
 
 
 # POST /api/v1/face/check-status
@@ -268,10 +270,7 @@ def face_check_status_endpoint(
         mobile_number=request.mobile_number,
     )
 
-    return JSONResponse(
-        status_code=result["status_code"],
-        content=result["body"],
-    )
+    return _service_response(result["status_code"], result["body"])
 
 
 # POST /api/v1/face/register
@@ -293,10 +292,7 @@ def face_register_endpoint(
         face_image_base64=request.face_image_base64,
     )
 
-    return JSONResponse(
-        status_code=result["status_code"],
-        content=result["body"],
-    )
+    return _service_response(result["status_code"], result["body"])
 
 
 # GET /api/v1/face/details/{mobile_number}

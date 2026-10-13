@@ -64,3 +64,50 @@ class RevokedRefreshToken(Base):
         DateTime(timezone=True),
         nullable=False,
     )
+
+
+class RefreshTokenFamily(Base):
+    """
+    One signed-in device. Every refresh token issued for that device carries
+    the family_id; signing out or a replayed refresh token revokes the
+    whole family.
+    """
+
+    __tablename__ = "refresh_token_families"
+
+    family_id: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+
+    mobile_number: Mapped[str] = mapped_column(
+        String(15),
+        nullable=False,
+        index=True,
+    )
+
+    device_name: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # "sign_out" or "token_reuse"
+    revoked_reason: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )

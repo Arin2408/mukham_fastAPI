@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.core.errors import register_error_handlers
 from app.services.storage import uses_s3
 
 from app.api.v1.health import router as health_router
@@ -26,9 +27,12 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Every error response carries `code` and `message` (app/core/errors.py).
+register_error_handlers(app)
+
 app.add_middleware(
     CORSMiddleware,
-    # Comma-separated CORS_ALLOWED_ORIGINS from .env (shared with Django)
+    # Comma-separated CORS_ALLOWED_ORIGINS from .env
     allow_origins=[
         origin.strip()
         for origin in settings.cors_allowed_origins.split(",")
@@ -39,7 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Uploaded employee photos, same /media/ URLs Django served.
+# Uploaded employee photos at /media/... (local storage only).
 # With MEDIA_S3_BUCKET set, photos get signed S3 URLs instead.
 if not uses_s3():
     settings.media_root.mkdir(parents=True, exist_ok=True)

@@ -18,6 +18,9 @@ class MobileLoginRequest(BaseModel):
     mobile_number: str = Field(min_length=1, max_length=20)
     password: str = Field(min_length=1)
 
+    # Optional label for the signed-in device, e.g. "Pixel 8" (mobile app).
+    device_name: str | None = Field(default=None, max_length=100)
+
 
 class OrgLoginResponse(BaseModel):
     access: str
@@ -93,3 +96,6 @@ class MemberPreAuthResponse(BaseModel):
 
 class MemberLoginCompleteRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+
+    # Optional label for the signed-in device, e.g. "Pixel 8" (mobile app).
+    device_name: str | None = Field(default=None, max_length=100)

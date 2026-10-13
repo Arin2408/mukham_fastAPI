@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
-    # Django-compatible database variables
+    # Database
     postgres_db: str = "mukham"
     postgres_user: str = "postgres"
     postgres_password: str
@@ -19,7 +19,11 @@ class Settings(BaseSettings):
     # Application
     secret_key: str
 
-    # DEBUG=True (as in Django's .env) enables the /debug/* routes.
+    # Refresh tokens rotate on every use; this is how long one signed-in
+    # device can stay idle before it must sign in again.
+    refresh_token_expire_days: int = 30
+
+    # DEBUG=True enables the /debug/* routes.
     debug: bool = False
 
     # AWS
@@ -35,7 +39,7 @@ class Settings(BaseSettings):
     # Geofencing
     geofence_max_accuracy_meters: int = 100
 
-    # Email (same Resend SMTP account Django uses)
+    # Email (Resend SMTP)
     email_host: str = "smtp.resend.com"
     email_port: int = 587
     email_host_user: str = "resend"
@@ -46,7 +50,7 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     password_reset_token_minutes: int = 30
 
-    # Uploaded files (shared with Django's MEDIA_ROOT)
+    # Employee photos (local storage; served at /media)
     media_root: Path = BASE_DIR / "media"
 
     # Enrolled face images. Never mounted or served over HTTP.

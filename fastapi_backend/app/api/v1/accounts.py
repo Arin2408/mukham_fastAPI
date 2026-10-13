@@ -27,6 +27,7 @@ from app.schemas.account import (
 from app.services.account_service import (
     AccountError,
     check_registration_status,
+    end_session,
     login_member,
     login_organisation,
     prepare_password_reset,
@@ -97,7 +98,9 @@ def org_login(
     db: Session = Depends(get_db),
 ):
     try:
-        return login_organisation(db, data.mobile_number, data.password)
+        return login_organisation(
+            db, data.mobile_number, data.password, data.device_name
+        )
     except AccountError as error:
         _raise(error)
 
@@ -136,6 +139,7 @@ def member_login_complete(
             db,
             current_user.mobile_number,
             data.session_id,
+            data.device_name,
         )
     except AccountError as error:
         _raise(error)
@@ -220,3 +224,18 @@ def refresh_token(
         return refresh_access_token(db, data.refresh)
     except AccountError as error:
         _raise(error)
+
+
+# --------------------------------------------------
+# POST /api/v1/auth/logout
+# Revokes the device's refresh tokens. Needs no access token, so it
+# works after the access token has expired. Always returns 200.
+# --------------------------------------------------
+
+@router.post("/auth/logout")
+def logout(
+    data: RefreshRequest,
+    db: Session = Depends(get_db),
+):
+    end_session(db, data.refresh)
+    return {"message": "Signed out"}

@@ -2,10 +2,10 @@ from sqlalchemy.orm import Session
 
 from app.core.security import (
     create_access_token,
-    create_refresh_token,
     verify_password,
 )
 from app.models.user import User
+from app.services.account_service import start_session
 
 
 def authenticate_user(
@@ -14,8 +14,7 @@ def authenticate_user(
     password: str,
 ) -> User | None:
     """
-    Authenticate an existing user using the same database
-    used by Django.
+    Authenticate a user by mobile number and password.
     """
 
     user = (
@@ -42,18 +41,24 @@ def authenticate_user(
 
 
 def create_tokens(
+    db: Session,
     user: User,
+    device_name: str | None = None,
 ) -> dict[str, str]:
     """
-    Generate access and refresh tokens for an authenticated user.
+    Start a session for an authenticated user and return its tokens.
     """
+    try:
+        refresh = start_session(db, user, device_name)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "access": create_access_token(
             user.mobile_number
         ),
-        "refresh": create_refresh_token(
-            user.mobile_number
-        ),
+        "refresh": refresh,
         "token_type": "bearer",
     }

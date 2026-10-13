@@ -10,6 +10,7 @@ from app.models.task import Task
 
 from app.models.security_tracking import (
     LivenessSession,
+    RefreshTokenFamily,
     RevokedRefreshToken,
 )
 
