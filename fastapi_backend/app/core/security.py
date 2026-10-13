@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
@@ -75,24 +76,16 @@ def create_access_token(
     )
 
 
-def create_refresh_token(
-    mobile_number: str,
-) -> str:
-    """
-    Create a refresh JWT.
-    """
 
+def create_member_pre_auth_token(mobile_number: str) -> str:
     now = datetime.now(timezone.utc)
 
-    expire = now + timedelta(
-        days=REFRESH_TOKEN_EXPIRE_DAYS
-    )
-
     payload = {
-        "token_type": "refresh",
+        "token_type": "member_pre_auth",
         "mobile_number": mobile_number,
+        "jti": uuid.uuid4().hex,
         "iat": now,
-        "exp": expire,
+        "exp": now + timedelta(minutes=5),
     }
 
     return jwt.encode(
@@ -100,6 +93,28 @@ def create_refresh_token(
         settings.secret_key,
         algorithm=JWT_ALGORITHM,
     )
+def create_refresh_token(
+    mobile_number: str,
+) -> str:
+    """Create a refresh JWT with a unique identifier for rotation."""
+    now = datetime.now(timezone.utc)
+
+    payload = {
+        "token_type": "refresh",
+        "mobile_number": mobile_number,
+        "jti": uuid.uuid4().hex,
+        "iat": now,
+        "exp": now + timedelta(
+            days=REFRESH_TOKEN_EXPIRE_DAYS
+        ),
+    }
+
+    return jwt.encode(
+        payload,
+        settings.secret_key,
+        algorithm=JWT_ALGORITHM,
+    )
+
 
 def _password_fingerprint(hashed_password: str) -> str:
     # Changes whenever the password changes, which makes a reset token
@@ -157,11 +172,9 @@ def password_reset_token_matches(
     )
 
 
+
 def decode_refresh_token(token: str) -> dict | None:
-    """
-    Accept refresh tokens issued by FastAPI or by Django SimpleJWT
-    (both are HS256 with the same secret and a mobile_number claim).
-    """
+    """Validate a refresh JWT issued by this application."""
     try:
         payload = jwt.decode(
             token,
@@ -177,7 +190,11 @@ def decode_refresh_token(token: str) -> dict | None:
     if not payload.get("mobile_number"):
         return None
 
+    if not payload.get("jti") or not payload.get("exp"):
+        return None
+
     return payload
+
 
 
 FACE_TOKEN_EXPIRE_MINUTES = 5

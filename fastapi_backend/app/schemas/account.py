@@ -81,4 +81,15 @@ class RefreshRequest(BaseModel):
 
 class RefreshResponse(BaseModel):
     access: str
+    refresh: str
     token_type: str = "bearer"
+
+
+class MemberPreAuthResponse(BaseModel):
+    message: str
+    pre_auth_token: str
+    user_type: str
+
+
+class MemberLoginCompleteRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)

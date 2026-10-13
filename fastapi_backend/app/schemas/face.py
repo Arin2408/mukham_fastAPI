@@ -35,9 +35,9 @@ class FaceRegisterRequest(BaseModel):
     face_image_base64: str = Field(min_length=1)
 
 
+
 class FaceDetailsResponse(BaseModel):
     mobile_number: str
-    face_image_base64: str
     created_at: datetime
     updated_at: datetime
 

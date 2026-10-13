@@ -11,6 +11,12 @@ import logging
 import secrets
 import smtplib
 import string
+from app.models.security_tracking import LivenessSession, RevokedRefreshToken
+from datetime import datetime, timezone
+
+from sqlalchemy.exc import IntegrityError
+
+from app.models.security_tracking import RevokedRefreshToken
 from email.message import EmailMessage
 
 from sqlalchemy.orm import Session
@@ -25,6 +31,7 @@ from app.core.security import (
     hash_password,
     password_reset_token_matches,
     verify_password,
+    create_member_pre_auth_token,
 )
 from app.models.employee import Employee
 from app.models.user import User
@@ -176,6 +183,7 @@ def serialize_member_profile(user: User, employee: Employee) -> dict:
     }
 
 
+
 def login_member(
     db: Session,
     mobile_number: str,
@@ -189,18 +197,66 @@ def login_member(
     if not employee.member_password:
         raise AccountError(400, "Member access not configured")
 
-    # Django's "FACE_BYPASS_PLACEHOLDER" password and the error that
-    # revealed the expected password were intentionally not migrated.
     if not _safe_verify(password, employee.member_password):
         raise AccountError(400, "Invalid mobile number or password.")
 
-    if not employee.is_member_registered:
-        employee.is_member_registered = True
-        try:
-            db.commit()
-        except Exception:
+    return {
+        "message": "Credentials verified. Face verification required.",
+        "pre_auth_token": create_member_pre_auth_token(user.mobile_number),
+        "user_type": "employee",
+    }
+
+def complete_member_login(
+    db: Session,
+    mobile_number: str,
+    session_id: str,
+) -> dict:
+    user, employee = _get_member(db, mobile_number)
+
+    if not user.is_active:
+        raise AccountError(401, "User account is inactive")
+
+    normalized_mobile = normalize_mobile(user.mobile_number)
+
+    try:
+        liveness = (
+            db.query(LivenessSession)
+            .filter(LivenessSession.session_id == session_id)
+            .with_for_update()
+            .first()
+        )
+
+        if (
+            liveness is None
+            or liveness.mobile_number != normalized_mobile
+            or liveness.consumed_at is None
+            or liveness.face_verified_at is None
+        ):
             db.rollback()
-            raise
+            raise AccountError(
+                401,
+                "A successful face verification is required.",
+            )
+
+        if liveness.login_completed_at is not None:
+            db.rollback()
+            raise AccountError(
+                409,
+                "This face verification session has already been used.",
+            )
+
+        liveness.login_completed_at = datetime.now(timezone.utc)
+
+        if not employee.is_member_registered:
+            employee.is_member_registered = True
+
+        db.commit()
+
+    except AccountError:
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "message": "Login successful",
@@ -214,6 +270,7 @@ def login_member(
         "is_registered": employee.is_member_registered,
         "profile": serialize_member_profile(user, employee),
     }
+
 
 
 def check_registration_status(db: Session, mobile_number: str) -> dict:
@@ -303,27 +360,76 @@ def reset_password(db: Session, token: str, new_password: str) -> None:
 # TOKEN REFRESH
 # --------------------------------------------------
 
+
 def refresh_access_token(db: Session, refresh_token: str) -> dict:
     payload = decode_refresh_token(refresh_token)
 
     if payload is None:
         raise AccountError(401, "Invalid or expired refresh token")
 
+    mobile_number = str(payload["mobile_number"])
+    token_jti = str(payload["jti"])
+
     user = (
         db.query(User)
-        .filter(User.mobile_number == str(payload["mobile_number"]))
+        .filter(User.mobile_number == mobile_number)
         .first()
     )
 
     if user is None or not user.is_active:
         raise AccountError(401, "Invalid or expired refresh token")
 
-    role = "organization" if user.is_organization else "employee"
-    claims = {"role": role}
-    if user.is_organization:
-        claims["org_id"] = user.org_id
+    already_revoked = (
+        db.query(RevokedRefreshToken)
+        .filter(RevokedRefreshToken.jti == token_jti)
+        .first()
+    )
+
+    if already_revoked is not None:
+        raise AccountError(401, "Invalid or expired refresh token")
+
+    now = datetime.now(timezone.utc)
+
+    try:
+        # The primary key on jti prevents the same refresh token
+        # from being successfully rotated twice, including concurrent
+        # requests.
+        db.add(
+            RevokedRefreshToken(
+                jti=token_jti,
+                mobile_number=user.mobile_number,
+                expires_at=datetime.fromtimestamp(
+                    int(payload["exp"]),
+                    tz=timezone.utc,
+                ),
+                revoked_at=now,
+            )
+        )
+
+        role = "organization" if user.is_organization else "employee"
+        claims = {"role": role}
+
+        if user.is_organization:
+            claims["org_id"] = user.org_id
+
+        new_access = create_access_token(
+            user.mobile_number,
+            claims,
+        )
+        new_refresh = create_refresh_token(user.mobile_number)
+
+        db.commit()
+
+    except IntegrityError:
+        db.rollback()
+        raise AccountError(401, "Invalid or expired refresh token")
+
+    except Exception:
+        db.rollback()
+        raise
 
     return {
-        "access": create_access_token(user.mobile_number, claims),
+        "access": new_access,
+        "refresh": new_refresh,
         "token_type": "bearer",
     }

@@ -1,5 +1,11 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from app.dependencies.auth import get_current_member_pre_auth
+from app.models.user import User
+from app.services.account_service import (
+    login_member,
+    complete_member_login,
+)
 
 from app.db.session import get_db
 from app.schemas.account import (
@@ -15,6 +21,8 @@ from app.schemas.account import (
     RefreshResponse,
     RegistrationStatusResponse,
     ResetPasswordRequest,
+    MemberLoginCompleteRequest,
+    MemberPreAuthResponse,
 )
 from app.services.account_service import (
     AccountError,
@@ -98,9 +106,10 @@ def org_login(
 # POST /api/v1/member/login   (Django: /api/member/login/)
 # --------------------------------------------------
 
+
 @router.post(
     "/member/login",
-    response_model=MemberLoginResponse,
+    response_model=MemberPreAuthResponse,
 )
 def member_login(
     data: MobileLoginRequest,
@@ -110,6 +119,27 @@ def member_login(
         return login_member(db, data.mobile_number, data.password)
     except AccountError as error:
         _raise(error)
+
+
+
+@router.post(
+    "/member/login/complete",
+    response_model=MemberLoginResponse,
+)
+def member_login_complete(
+    data: MemberLoginCompleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_member_pre_auth),
+):
+    try:
+        return complete_member_login(
+            db,
+            current_user.mobile_number,
+            data.session_id,
+        )
+    except AccountError as error:
+        _raise(error)
+
 
 
 # --------------------------------------------------

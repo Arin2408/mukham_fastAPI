@@ -8,6 +8,11 @@ from app.models.attendance import Attendance
 from app.models.face import EmployeeFaceData
 from app.models.task import Task
 
+from app.models.security_tracking import (
+    LivenessSession,
+    RevokedRefreshToken,
+)
+
 __all__ = [
     "User",
     "Department",
