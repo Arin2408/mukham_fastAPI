@@ -12,3 +12,6 @@ db.sqlite3-journal
 *.log
 docker-compose.yml
 Dockerfile
+media
+private_media
+face/venv

@@ -35,6 +35,7 @@ db.sqlite3.backup
 # =========================
 media/
 mediafiles/
+private_media/
 uploads/
 
 # =========================

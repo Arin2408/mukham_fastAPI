@@ -5,30 +5,32 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Gunicorn settings (override at runtime if needed)
-# Rule of thumb for workers: 2 x CPU cores + 1
-ENV GUNICORN_WORKERS 4
-ENV GUNICORN_THREADS 4
-ENV GUNICORN_TIMEOUT 60
+# Uvicorn workers (rule of thumb: 2 x CPU cores + 1)
+ENV WEB_CONCURRENCY 4
 
 # Set work directory
 WORKDIR /app
 
-# Install dependencies (psycopg2-binary ships its own libpq, no build tools needed)
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies. Django (requirements.txt) is still needed for the
+# base schema migrations; the API itself is FastAPI.
+# (psycopg2-binary / psycopg[binary] ship their own libpq, no build tools needed)
+COPY requirements.txt requirements-fastapi.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-fastapi.txt
 
 # Copy project
 COPY . /app/
 
 # Expose port
-EXPOSE 8001
+EXPOSE 8002
 
-# Start the production server (multi-process, threaded workers)
-CMD gunicorn mukham.wsgi:application \
-    --bind 0.0.0.0:8001 \
-    --workers ${GUNICORN_WORKERS} \
-    --worker-class gthread \
-    --threads ${GUNICORN_THREADS} \
-    --timeout ${GUNICORN_TIMEOUT} \
-    --access-logfile -
+# Database migrations are a separate step before starting a new version:
+#   docker run --rm --env-file .env <image> sh -c \
+#     "python manage.py migrate && cd fastapi_backend && alembic upgrade head"
+
+# Start the FastAPI server
+WORKDIR /app/fastapi_backend
+CMD uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8002 \
+    --workers ${WEB_CONCURRENCY} \
+    --proxy-headers

@@ -331,6 +331,17 @@ class EmployeeListSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source='department.details', read_only=True, default="N/A")
     shift_name = serializers.CharField(source='shift.shift_name', read_only=True, default="N/A")
     location_name = serializers.CharField(source='office_location.location_name', read_only=True, default="N/A")
+    photo = serializers.SerializerMethodField()
+
+    def get_photo(self, obj):
+        """
+        Return the employee photo URL, or None if the file is missing.
+        Face images are no longer in the database, so a missing photo
+        cannot be rebuilt here; FastAPI writes it at face enrolment.
+        """
+        if obj.photo and obj.photo.storage.exists(obj.photo.name):
+            return obj.photo.url
+        return None
 
     class Meta:
         model = Customuser

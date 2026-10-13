@@ -17,9 +17,18 @@ class EmployeeFaceData(Base):
         primary_key=True,
     )
 
+    # Key in face_store (app/services/storage.py).
+    face_image_key: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="",
+    )
+
+    # Legacy rows only; new images go to face_store.
     face_image_base64: Mapped[str] = mapped_column(
         Text,
         nullable=False,
+        default="",
     )
 
     created_at: Mapped[datetime] = mapped_column(

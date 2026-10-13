@@ -48,7 +48,8 @@ urlpatterns = [
     path('api/', include('locations.urls')),
     path('api/', include('designations.urls')),
     path('api/', include('departments.urls')),
-    path('api/face/', include('face_auth.urls')),
+    # Face API retired: served by FastAPI at /api/v1/face/*. The face_auth
+    # app keeps only its model and migrations (it owns the face table).
     # path('api/', include('registerusers.urls')),
     # path('api/', include('registrations.urls')),
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),

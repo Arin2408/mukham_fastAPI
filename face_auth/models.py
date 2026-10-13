@@ -11,8 +11,13 @@ class EmployeeFaceData(models.Model):
         primary_key=True,
         related_name='face_data'
     )
-    # Storing image as Base64 string
-    face_image_base64 = models.TextField()
+    # Key of the face image in FastAPI's private face store
+    # (fastapi_backend/app/services/storage.py). Images are no longer
+    # kept in the database.
+    face_image_key = models.CharField(max_length=255, blank=True, default='', db_default='')
+    # Legacy: base64 image from before the move to the face store.
+    # Emptied by fastapi_backend/scripts/move_files_to_storage.py.
+    face_image_base64 = models.TextField(blank=True, default='', db_default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

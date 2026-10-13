@@ -1,4 +1,5 @@
 
+import logging
 import secrets
 
 from fastapi import HTTPException
@@ -11,6 +12,10 @@ from app.models.department import Department
 from app.models.designation import Designation
 from app.models.shift import Shift
 from app.models.location import Location
+from app.services.storage import face_store, media_store
+
+
+logger = logging.getLogger(__name__)
 
 
 password_context = CryptContext(
@@ -73,7 +78,7 @@ def media_url(path: str | None) -> str | None:
         return None
     if path.startswith(("http://", "https://", "/")):
         return path
-    return f"/media/{path}"
+    return media_store.url(path)
 
 
 def serialize_employee(employee: Employee) -> dict:
@@ -586,12 +591,20 @@ def delete_employee(
             .delete(synchronize_session=False)
         )
 
+        # Files are removed only after the rows are gone (below).
+        employee_id = employee.user_id
+        photo_path = employee.photo
+        face_key = None
+
         if user is not None:
-            (
+            face_record = (
                 db.query(EmployeeFaceData)
                 .filter(EmployeeFaceData.mobile_number == user.mobile_number)
-                .delete(synchronize_session=False)
+                .first()
             )
+            if face_record is not None:
+                face_key = face_record.face_image_key or None
+                db.delete(face_record)
 
             # Django-only tables that reference the auth user.
             for table, column in (
@@ -615,3 +628,15 @@ def delete_employee(
     except Exception:
         db.rollback()
         raise
+
+    # Biometric data must not outlive the employee record.
+    try:
+        if face_key:
+            face_store.delete(face_key)
+        if photo_path and not photo_path.startswith(("http://", "https://", "/")):
+            media_store.delete(photo_path)
+    except Exception:
+        logger.exception(
+            "Employee %s deleted but stored files were not removed",
+            employee_id,
+        )

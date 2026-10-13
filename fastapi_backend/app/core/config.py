@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     # Uploaded files (shared with Django's MEDIA_ROOT)
     media_root: Path = BASE_DIR / "media"
 
+    # Enrolled face images. Never mounted or served over HTTP.
+    private_media_root: Path = BASE_DIR / "private_media"
+
+    # When set, photos and face images go to this private S3 bucket
+    # (under media/ and faces/) instead of the two folders above.
+    media_s3_bucket: str | None = None
+    media_url_expire_seconds: int = 3600
+
     # Logging
     log_level: str = "INFO"
 

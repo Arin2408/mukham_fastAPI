@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.services.storage import uses_s3
 
 from app.api.v1.health import router as health_router
 from app.api.v1.debug import router as debug_router
@@ -39,12 +40,14 @@ app.add_middleware(
 )
 
 # Uploaded employee photos, same /media/ URLs Django served.
-settings.media_root.mkdir(parents=True, exist_ok=True)
-app.mount(
-    "/media",
-    StaticFiles(directory=settings.media_root),
-    name="media",
-)
+# With MEDIA_S3_BUCKET set, photos get signed S3 URLs instead.
+if not uses_s3():
+    settings.media_root.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/media",
+        StaticFiles(directory=settings.media_root),
+        name="media",
+    )
 
 
 @app.get("/health")

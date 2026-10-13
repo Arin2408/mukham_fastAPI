@@ -9,8 +9,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import create_face_token
 from app.models.face import EmployeeFaceData
+from app.services.storage import face_store, media_store
 
 from datetime import datetime, timezone
+from io import BytesIO
+
+from PIL import Image, ImageOps
 
 
 logger = logging.getLogger(__name__)
@@ -49,6 +53,38 @@ def normalize_mobile(mobile_number: str) -> str:
     )[-10:]
 
 
+# ---------------------------------------------------------
+# FACE IMAGE STORAGE
+# Enrolled images live in face_store, not in the database.
+# ---------------------------------------------------------
+
+def load_face_image(face_record: EmployeeFaceData) -> bytes | None:
+    if face_record.face_image_key:
+        return face_store.read(face_record.face_image_key)
+
+    # Rows not yet moved by scripts/move_files_to_storage.py.
+    if face_record.face_image_base64:
+        return base64.b64decode(face_record.face_image_base64)
+
+    return None
+
+
+def store_face_image(
+    face_record: EmployeeFaceData,
+    normalized: str,
+    image_bytes: bytes,
+) -> None:
+    key = f"{normalized}.jpg"
+    face_store.save(key, image_bytes, "image/jpeg")
+    face_record.face_image_key = key
+    face_record.face_image_base64 = ""
+
+
+def delete_face_image(face_record: EmployeeFaceData) -> None:
+    if face_record.face_image_key:
+        face_store.delete(face_record.face_image_key)
+
+
 def verify_face(
     db: Session,
     mobile_number: str,
@@ -82,11 +118,25 @@ def verify_face(
                 },
             }
 
-        try:
-            stored_image_bytes = base64.b64decode(
-                face_record.face_image_base64
+        stored_image_bytes = load_face_image(face_record)
+
+        if stored_image_bytes is None:
+            logger.error(
+                "Face verify: stored image missing for %s",
+                normalized,
             )
 
+            return {
+                "status_code": 404,
+                "body": {
+                    "error": (
+                        "No reference face image found. "
+                        "Please register first."
+                    )
+                },
+            }
+
+        try:
             captured_image_bytes = base64.b64decode(
                 captured_image_base64
             )
@@ -329,53 +379,17 @@ def get_liveness_result(
 
             # Check whether this face already belongs
             # to another employee.
-            other_faces = (
-                db.query(EmployeeFaceData)
-                .filter(
-                    EmployeeFaceData.mobile_number != normalized
-                )
-                .all()
-            )
-
-            for other in other_faces:
-                try:
-                    stored_bytes = base64.b64decode(
-                        other.face_image_base64
-                    )
-
-                    comparison = rekognition.compare_faces(
-                        SourceImage={
-                            "Bytes": stored_bytes
-                        },
-                        TargetImage={
-                            "Bytes": reference_bytes
-                        },
-                        SimilarityThreshold=90,
-                    )
-
-                    if comparison.get("FaceMatches"):
-                        return {
-                            "status_code": 400,
-                            "body": {
-                                "error": (
-                                    "This face is already registered "
-                                    "to another employee account."
-                                ),
-                                "code": "DUPLICATE_FACE",
-                            },
-                        }
-
-                except Exception as e:
-                    logger.warning(
-                        "Duplicate-face check failed for %s: %s",
-                        other.mobile_number,
-                        e,
-                    )
-                    continue
-
-            face_base64 = base64.b64encode(
-                reference_bytes
-            ).decode("utf-8")
+            if find_duplicate_face(db, normalized, reference_bytes):
+                return {
+                    "status_code": 400,
+                    "body": {
+                        "error": (
+                            "This face is already registered "
+                            "to another employee account."
+                        ),
+                        "code": "DUPLICATE_FACE",
+                    },
+                }
 
             # Django automatically populated these timestamps
             # using auto_now_add / auto_now.
@@ -384,10 +398,10 @@ def get_liveness_result(
 
             face_record = EmployeeFaceData(
                 mobile_number=normalized,
-                face_image_base64=face_base64,
                 created_at=now,
                 updated_at=now,
             )
+            store_face_image(face_record, normalized, reference_bytes)
 
             db.add(face_record)
             db.commit()
@@ -419,7 +433,13 @@ def get_liveness_result(
             .first()
         )
 
-        if face_record is None:
+        stored_image_bytes = (
+            load_face_image(face_record)
+            if face_record is not None
+            else None
+        )
+
+        if stored_image_bytes is None:
             return {
                 "status_code": 404,
                 "body": {
@@ -429,10 +449,6 @@ def get_liveness_result(
                     )
                 },
             }
-
-        stored_image_bytes = base64.b64decode(
-            face_record.face_image_base64
-        )
 
         try:
             aws_response = rekognition.compare_faces(
@@ -522,8 +538,12 @@ def find_duplicate_face(
 
     for other in other_faces:
         try:
+            stored_bytes = load_face_image(other)
+            if stored_bytes is None:
+                continue
+
             comparison = rekognition.compare_faces(
-                SourceImage={"Bytes": base64.b64decode(other.face_image_base64)},
+                SourceImage={"Bytes": stored_bytes},
                 TargetImage={"Bytes": image_bytes},
                 SimilarityThreshold=90,
             )
@@ -537,6 +557,19 @@ def find_duplicate_face(
             )
 
     return False
+
+
+PHOTO_MAX_SIDE = 512
+
+
+def resize_photo(image_bytes: bytes) -> bytes:
+    """Shrink a profile photo to at most 512 px a side, as JPEG."""
+    with Image.open(BytesIO(image_bytes)) as image:
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        image.thumbnail((PHOTO_MAX_SIDE, PHOTO_MAX_SIDE))
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=85, optimize=True)
+    return output.getvalue()
 
 
 def sync_employee_photo(
@@ -560,9 +593,11 @@ def sync_employee_photo(
 
         # Same location and naming Django's ImageField used.
         relative_path = f"employee_photos/face_{normalized}.jpg"
-        target = settings.media_root / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(image_bytes)
+        media_store.save(
+            relative_path,
+            resize_photo(image_bytes),
+            "image/jpeg",
+        )
 
         employee.photo = relative_path
         db.commit()
@@ -652,14 +687,14 @@ def register_face_image(
     if face_record is None:
         face_record = EmployeeFaceData(
             mobile_number=normalized,
-            face_image_base64=face_image_base64,
             created_at=now,
             updated_at=now,
         )
         db.add(face_record)
     else:
-        face_record.face_image_base64 = face_image_base64
         face_record.updated_at = now
+
+    store_face_image(face_record, normalized, image_bytes)
 
     try:
         db.commit()
