@@ -7,9 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import error_response
 from app.db.session import get_db
+from app.core.errors import ApiError
+from app.core.security import create_face_token
 from app.dependencies.auth import (
-    get_current_member_pre_auth,
+    LivenessCaller,
     get_current_user,
+    get_liveness_caller,
 )
 from app.models.employee import Employee
 from app.models.security_tracking import LivenessSession
@@ -26,6 +29,7 @@ from app.schemas.face import (
 from app.services.face_service import (
     check_face_status,
     create_liveness_session,
+    get_liveness_credentials,
     get_face_details,
     get_liveness_result,
     normalize_mobile,
@@ -124,8 +128,9 @@ def verify_face_endpoint(
 )
 def create_liveness_session_endpoint(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_member_pre_auth),
+    caller: LivenessCaller = Depends(get_liveness_caller),
 ):
+    current_user = caller.user
     _require_employee(current_user)
 
     result = create_liveness_session()
@@ -161,14 +166,33 @@ def create_liveness_session_endpoint(
     )
 
 
+# POST /api/v1/face/liveness/credentials
+# Mobile app: temporary AWS credentials for the liveness camera stream,
+# only for an employee signing in (after the password step) or checking in.
+@router.post("/face/liveness/credentials")
+def liveness_credentials_endpoint(
+    caller: LivenessCaller = Depends(get_liveness_caller),
+):
+    _require_employee(caller.user)
+
+    result = get_liveness_credentials()
+    return _service_response(result["status_code"], result["body"])
+
+
 # POST /api/v1/face/liveness/result
 @router.post("/face/liveness/result")
 def get_liveness_result_endpoint(
     request: LivenessResultRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_member_pre_auth),
+    caller: LivenessCaller = Depends(get_liveness_caller),
 ):
+    current_user = caller.user
     _require_employee(current_user)
+
+    # A signed-in employee (check-in) can only compare with the saved face,
+    # never save a new one: enrolment happens at the first sign-in.
+    if caller.signed_in and request.mode != "verify":
+        raise ApiError(400, "bad_request", "Only face verification is allowed here.")
 
     normalized = normalize_mobile(current_user.mobile_number)
 
@@ -245,6 +269,10 @@ def get_liveness_result_endpoint(
 
             verified_session.face_verified_at = datetime.now(timezone.utc)
             db.commit()
+
+            # Check-in: the proof /attendance/mark requires (valid 5 minutes).
+            if caller.signed_in:
+                body = {**body, "face_token": create_face_token(normalized)}
 
         except HTTPException:
             raise

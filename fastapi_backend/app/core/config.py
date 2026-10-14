@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_default_region: str = "ap-south-1"
+    # Cognito identity pool whose guest role may run face liveness checks
+    # (the web app uses the same pool from the browser).
+    aws_identity_pool_id: str | None = None
 
     # CORS
     cors_allowed_origins: str = (
@@ -49,6 +52,9 @@ class Settings(BaseSettings):
     # Frontend base URL used in password-reset links
     frontend_url: str = "http://localhost:3000"
     password_reset_token_minutes: int = 30
+
+    # Mobile app: versions below this are told to update (GET /app/config)
+    min_app_version: str = "1.0.0"
 
     # Employee photos (local storage; served at /media)
     media_root: Path = BASE_DIR / "media"

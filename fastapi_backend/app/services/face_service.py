@@ -2,6 +2,7 @@ import base64
 import logging
 
 import boto3
+from botocore import UNSIGNED
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
@@ -261,6 +262,52 @@ def create_liveness_session() -> dict:
                 "error": str(e)
             },
         }
+
+
+def get_liveness_credentials() -> dict:
+    """
+    Short-lived guest credentials from the Cognito identity pool: the same
+    ones the web app's browser gets, used by the phone to stream the
+    liveness video to AWS. GetId and GetCredentialsForIdentity are public
+    Cognito calls, so they are sent unsigned.
+    """
+    pool_id = settings.aws_identity_pool_id
+    if not pool_id:
+        return {
+            "status_code": 503,
+            "body": {"error": "Face liveness is not configured on the server."},
+        }
+
+    client = boto3.client(
+        "cognito-identity",
+        region_name=pool_id.split(":")[0],
+        config=Config(signature_version=UNSIGNED, connect_timeout=3, read_timeout=8),
+    )
+
+    try:
+        identity_id = client.get_id(IdentityPoolId=pool_id)["IdentityId"]
+        credentials = client.get_credentials_for_identity(
+            IdentityId=identity_id
+        )["Credentials"]
+    except ClientError as e:
+        logger.warning("Liveness credentials: Cognito error: %s", e)
+        return {
+            "status_code": 502,
+            "body": {"error": "Could not start the face check. Please try again."},
+        }
+
+    return {
+        "status_code": 200,
+        "body": {
+            "accessKeyId": credentials["AccessKeyId"],
+            "secretAccessKey": credentials["SecretKey"],
+            "sessionToken": credentials["SessionToken"],
+            # Instant.parse on Android expects UTC with a trailing Z.
+            "expiration": credentials["Expiration"]
+            .astimezone(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    }
 
 
 def get_liveness_result(

@@ -36,6 +36,7 @@ database schema.
    | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated |
    | `EMAIL_HOST_PASSWORD` | | Resend SMTP, for password-reset emails |
    | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | How long a signed-in device may stay idle |
+   | `MIN_APP_VERSION` | `1.0.0` | Mobile app versions below this must update (`GET /app/config`) |
 
 3. Create the database user and database. With Homebrew PostgreSQL the
    default superuser is your macOS user, so `postgres` may not exist yet:

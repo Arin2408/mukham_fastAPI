@@ -14,8 +14,14 @@ class AttendanceMarkRequest(BaseModel):
     longitude: float | None = Field(default=None, ge=-180, le=180)
     accuracy: float | None = Field(default=None, ge=0)
 
-    # Returned by POST /face/verify after a successful server-side match.
+    # Returned by POST /face/verify (web) or /face/liveness/result (mobile)
+    # after a successful server-side match.
     face_token: str | None = None
+
+    # Mobile app only: Android reported a GPS-faking app; which device.
+    # Recorded and flagged for the admin, not used to reject the check-in.
+    is_mocked: bool | None = None
+    device_id: str | None = Field(default=None, max_length=100)
 
     # Sent by older clients; ignored - the server decides these.
     location_status: str | None = None

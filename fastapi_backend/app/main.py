@@ -7,6 +7,7 @@ from app.core.errors import register_error_handlers
 from app.services.storage import uses_s3
 
 from app.api.v1.health import router as health_router
+from app.api.v1.app_config import router as app_config_router
 from app.api.v1.debug import router as debug_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.accounts import router as accounts_router
@@ -20,6 +21,7 @@ from app.api.v1.attendance import router as attendance_router
 from app.api.v1.geofence import router as geofence_router
 from app.api.v1.face import router as face_router
 from app.api.v1.tasks import router as tasks_router
+from app.api.v1.dashboard import router as dashboard_router
 
 
 app = FastAPI(
@@ -66,6 +68,12 @@ app.include_router(
     health_router,
     prefix="/api/v1",
     tags=["Health"],
+)
+
+app.include_router(
+    app_config_router,
+    prefix="/api/v1",
+    tags=["App"],
 )
 
 app.include_router(
@@ -126,6 +134,12 @@ app.include_router(
     tasks_router,
     prefix="/api/v1",
     tags=["Tasks"],
+)
+
+app.include_router(
+    dashboard_router,
+    prefix="/api/v1",
+    tags=["Dashboard"],
 )
 
 

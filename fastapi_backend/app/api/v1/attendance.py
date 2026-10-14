@@ -185,6 +185,8 @@ def attendance_mark(
             longitude=request.longitude,
             accuracy=request.accuracy,
             face_token=request.face_token,
+            is_mocked=request.is_mocked,
+            device_id=request.device_id,
         )
 
     except FaceVerificationRequired as exc:
@@ -352,6 +354,14 @@ def attendance_employee_list(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # An employee's org_id is their own account id, which can equal another
+    # organisation's id, so without this check they could read its list.
+    if not current_user.is_organization:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access required",
+        )
+
     return get_attendance_employee_list(
         db=db,
         org_id=current_user.org_id,

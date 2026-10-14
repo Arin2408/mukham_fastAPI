@@ -172,3 +172,38 @@ def get_current_member_pre_auth(
         raise credentials_exception
 
     return user
+
+
+class LivenessCaller:
+    """Who is running a face check: an employee signing in, or one checking in."""
+
+    def __init__(self, user: User, signed_in: bool):
+        self.user = user
+        # True for a full session (check-in); False for the 5-minute
+        # pre-sign-in token issued after the password step (sign-in).
+        self.signed_in = signed_in
+
+
+def get_liveness_caller(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> LivenessCaller:
+    """
+    Accept either token type for the face-check endpoints. The type is only
+    read to choose the check; each check then verifies the token fully.
+    """
+    try:
+        token_type = jwt.get_unverified_claims(credentials.credentials).get("token_type")
+    except JWTError:
+        token_type = None
+
+    if token_type == "member_pre_auth":
+        return LivenessCaller(get_current_member_pre_auth(credentials, db), signed_in=False)
+
+    user = get_current_user(credentials, db)
+    if user.is_organization:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Employee account required",
+        )
+    return LivenessCaller(user, signed_in=True)

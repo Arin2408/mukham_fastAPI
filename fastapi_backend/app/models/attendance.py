@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -79,6 +80,18 @@ class Attendance(Base):
 
     check_in_location_id: Mapped[int | None] = mapped_column(
         ForeignKey("locations_location.location_id"),
+        nullable=True,
+    )
+
+    # Mobile app check-ins only: the phone reported a GPS-faking app, and
+    # which device checked in. Flagged for the admin, not rejected.
+    check_in_mocked: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+    )
+
+    check_in_device_id: Mapped[str | None] = mapped_column(
+        String(100),
         nullable=True,
     )
 

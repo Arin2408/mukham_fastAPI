@@ -405,6 +405,8 @@ def mark_attendance(
     longitude: float | None,
     accuracy: float | None,
     face_token: str | None,
+    is_mocked: bool | None = None,
+    device_id: str | None = None,
 ) -> tuple[Attendance, str, Location | None, float | None]:
     """
     Employee self check-in / check-out. Mirrors Django mark_attendance():
@@ -514,6 +516,8 @@ def mark_attendance(
         check_in_accuracy=accuracy,
         check_in_distance=distance,
         check_in_location_id=office.location_id,
+        check_in_mocked=is_mocked,
+        check_in_device_id=device_id,
         face_status="verified",
         hours_worked=None,
     )
