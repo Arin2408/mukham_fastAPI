@@ -1,9 +1,10 @@
+import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.dependencies.auth import get_current_user
 from app.models.task import Task
 from app.models.user import User
@@ -14,6 +15,7 @@ from app.schemas.task import (
     TaskStatusRequest,
     TaskUpdateRequest,
 )
+from app.services.notification_service import notify_new_task
 from app.services.task_service import (
     create_task,
     delete_task,
@@ -114,6 +116,7 @@ def get_one_task(
 )
 def add_task(
     data: TaskCreateRequest,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -125,7 +128,19 @@ def add_task(
         created_by_id=current_user.org_id,
         data=data,
     )
+    # "New task: …" to the employee's phones, after the response is sent.
+    background.add_task(_notify_new_task, task.employee_id, task.task_id, task.title)
     return serialize_task(task)
+
+
+def _notify_new_task(employee_id: int, task_id: int, title: str) -> None:
+    db = SessionLocal()
+    try:
+        notify_new_task(db, employee_id, task_id, title)
+    except Exception:  # A failed push must never affect the task itself.
+        logging.getLogger(__name__).exception("New-task notification failed")
+    finally:
+        db.close()
 
 
 @router.put(

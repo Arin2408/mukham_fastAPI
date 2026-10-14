@@ -49,6 +49,9 @@ PostgreSQL. Alembic owns the whole database schema.
    | `MIN_APP_VERSION` | `1.0.0` | Mobile app versions below this must update (`GET /app/config`) |
    | `GEOCODING_ENABLED` | `True` | Address search for office locations (`GET /geocode/search`). Set `False` to switch it off without an app update |
    | `GEOCODING_USER_AGENT` | `Mukham/1.0 (you@example.com)` | Sent to OpenStreetMap's Nominatim, whose policy requires the app's name and a contact |
+   | `EXPO_ACCESS_TOKEN` | | Expo access token for sending push notifications (expo.dev › Access tokens). Required once enhanced push security is on |
+   | `NOTIFICATIONS_ENABLED` | `True` | `False` stops all push notifications |
+   | `SHIFT_REMINDER_MINUTES`, `CHECKOUT_REMINDER_MINUTES` | `15`, `60` | When "Your shift starts soon" and "You're still checked in" are sent |
 
 3. Create the database user and database. With Homebrew PostgreSQL the
    default superuser is your macOS user, so `postgres` may not exist yet:
@@ -87,6 +90,20 @@ All under `/api/v1`; the full list is at `/docs`.
 | Admin | `GET /dashboard/summary`, `GET /geocode/search` (address search, at most one request per second to OpenStreetMap for all users), employees, departments (with `/departments/leaderboard`), designations, shifts, locations, tasks |
 | Employee | `GET /employee-details`, `GET /tasks`, `PATCH /tasks/{id}/status` |
 | Public | `GET /app/config` (minimum mobile app version), `GET /employees/{id}/card` (ID card page), `GET /health/db` |
+
+## Push notifications
+
+The mobile app registers each signed-in phone (`POST /devices`) and removes
+it at sign-out (`POST /devices/remove`). People switch kinds on and off with
+`GET`/`PUT /notifications/preferences`. "New task" is sent when a task is
+created. Shift reminders come from a job that must run every 5 minutes; each
+reminder is sent once however often it runs:
+
+```
+cd fastapi_backend
+python -m scripts.send_notifications              # once (cron: */5 * * * *)
+python -m scripts.send_notifications --every 300  # keep running (development)
+```
 
 ## API conventions
 

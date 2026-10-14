@@ -7,6 +7,12 @@ from app.models.employee import Employee
 from app.models.attendance import Attendance
 from app.models.face import EmployeeFaceData
 from app.models.task import Task
+from app.models.notification import (
+    NotificationPreference,
+    NotificationSent,
+    PushDevice,
+    PushTicket,
+)
 
 from app.models.security_tracking import (
     LivenessSession,
@@ -24,4 +30,8 @@ __all__ = [
     "Attendance",
     "EmployeeFaceData",
     "Task",
+    "PushDevice",
+    "NotificationPreference",
+    "NotificationSent",
+    "PushTicket",
 ]

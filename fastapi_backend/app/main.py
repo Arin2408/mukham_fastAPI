@@ -23,6 +23,7 @@ from app.api.v1.face import router as face_router
 from app.api.v1.tasks import router as tasks_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.geocode import router as geocode_router
+from app.api.v1.notifications import router as notifications_router
 
 
 app = FastAPI(
@@ -147,6 +148,12 @@ app.include_router(
     geocode_router,
     prefix="/api/v1",
     tags=["Geocoding"],
+)
+
+app.include_router(
+    notifications_router,
+    prefix="/api/v1",
+    tags=["Notifications"],
 )
 
 

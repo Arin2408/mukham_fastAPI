@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     geocoding_url: str = "https://nominatim.openstreetmap.org/search"
     geocoding_user_agent: str = "Mukham/1.0"
 
+    # Push notifications through Expo's push service. The access token
+    # (expo.dev > Access tokens) stops anyone with a leaked push token from
+    # messaging users as us; set it whenever enhanced push security is on.
+    notifications_enabled: bool = True
+    expo_access_token: str | None = None
+    expo_push_url: str = "https://exp.host/--/api/v2/push/send"
+    expo_receipts_url: str = "https://exp.host/--/api/v2/push/getReceipts"
+    # "Your shift starts soon" this many minutes before shift start, and
+    # "You're still checked in" this many minutes after shift end.
+    shift_reminder_minutes: int = 15
+    checkout_reminder_minutes: int = 60
+
     # Employee photos (local storage; served at /media)
     media_root: Path = BASE_DIR / "media"
 
