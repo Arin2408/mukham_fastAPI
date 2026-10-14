@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_organisation
 from app.models.department import Department
 from app.models.user import User
 from app.schemas.department import (
@@ -28,7 +28,7 @@ router = APIRouter()
 )
 def list_departments(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     return get_departments(
         db=db,
@@ -44,7 +44,7 @@ def list_departments(
 def add_department(
     data: DepartmentCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     return create_department(
         db=db,
@@ -62,7 +62,7 @@ def update_department_route(
     department_id: int,
     data: DepartmentUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     department = (
         db.query(Department)
@@ -94,7 +94,7 @@ def update_department_route(
 def delete_department_route(
     department_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     department = (
         db.query(Department)
@@ -125,7 +125,7 @@ def delete_department_route(
 )
 def department_leaderboard(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     return get_department_leaderboard(
         db=db,

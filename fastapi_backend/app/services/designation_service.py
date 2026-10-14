@@ -2,6 +2,8 @@ from sqlalchemy.orm import Session
 
 from app.models.department import Department
 from app.models.designation import Designation
+from app.models.employee import Employee
+from app.services.in_use import refuse_if_in_use
 
 
 def get_designations(
@@ -62,5 +64,10 @@ def delete_designation(
     db: Session,
     designation: Designation,
 ) -> None:
+    refuse_if_in_use(
+        designation.details,
+        {"employees": db.query(Employee).filter(Employee.designation_id == designation.designation_id).count()},
+        "Give them another designation first.",
+    )
     db.delete(designation)
     db.commit()

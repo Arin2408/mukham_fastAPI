@@ -1,8 +1,13 @@
 from decimal import Decimal
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models.attendance import Attendance
+from app.models.department import Department
+from app.models.employee import Employee
 from app.models.location import Location
+from app.services.in_use import refuse_if_in_use
 
 
 def get_locations(db: Session, org_id: int):
@@ -79,5 +84,20 @@ def update_location(
 
 
 def delete_location(db: Session, location: Location):
+    lid = location.location_id
+    refuse_if_in_use(
+        location.location_name,
+        {
+            "departments": db.query(Department).filter(Department.location_id == lid).count(),
+            "employees": db.query(Employee).filter(Employee.office_location_id == lid).count(),
+        },
+        "Move them to another office first.",
+    )
+    # Past check-ins point at the office; keep that history.
+    if db.query(Attendance).filter(Attendance.check_in_location_id == lid).first():
+        raise HTTPException(
+            status_code=409,
+            detail=f"{location.location_name} has attendance history, so it can't be deleted. Rename it or move its pin instead.",
+        )
     db.delete(location)
     db.commit()

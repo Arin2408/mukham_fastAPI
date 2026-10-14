@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_organisation
 from app.models.department import Department
 from app.models.designation import Designation
 from app.models.user import User
@@ -27,7 +27,7 @@ router = APIRouter()
 )
 def list_designations(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     return get_designations(
         db=db,
@@ -43,7 +43,7 @@ def list_designations(
 def add_designation(
     data: DesignationCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     department = (
         db.query(Department)
@@ -75,7 +75,7 @@ def update_designation_route(
     designation_id: int,
     data: DesignationUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     designation = (
         db.query(Designation)
@@ -129,7 +129,7 @@ def update_designation_route(
 def delete_designation_route(
     designation_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     designation = (
         db.query(Designation)

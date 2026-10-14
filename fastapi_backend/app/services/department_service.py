@@ -3,7 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.models.attendance import Attendance
 from app.models.department import Department
+from app.models.designation import Designation
 from app.models.employee import Employee
+from app.models.shift import Shift
+from app.services.in_use import refuse_if_in_use
 
 
 def get_departments(
@@ -59,6 +62,15 @@ def delete_department(
     db: Session,
     department: Department,
 ) -> None:
+    refuse_if_in_use(
+        department.details,
+        {
+            "employees": db.query(Employee).filter(Employee.department_id == department.department_id).count(),
+            "designations": db.query(Designation).filter(Designation.department_id == department.department_id).count(),
+            "shifts": db.query(Shift).filter(Shift.department_id == department.department_id).count(),
+        },
+        "Move or remove them first.",
+    )
     db.delete(department)
     db.commit()
 

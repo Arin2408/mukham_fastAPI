@@ -97,6 +97,23 @@ def get_current_user(
 
     return user
 
+def get_current_organisation(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    The signed-in organisation admin. Refuses employees: an employee's
+    org_id is their own account id, which can equal another organisation's
+    id, so a route that only filters by org_id would serve that
+    organisation's data to them.
+    """
+    if not current_user.is_organization:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access required",
+        )
+    return current_user
+
+
 def get_current_member_pre_auth(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),

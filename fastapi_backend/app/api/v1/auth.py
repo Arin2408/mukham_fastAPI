@@ -25,6 +25,9 @@ def verify_token(
         "mobile_number": current_user.mobile_number,
         "is_organization": current_user.is_organization,
         "role": "organization" if current_user.is_organization else "employee",
+        # The organisation's id for admins (their profile is
+        # /organisations/{org_id}); an employee's own account id otherwise.
+        "org_id": current_user.org_id,
     }
 
 @router.post(

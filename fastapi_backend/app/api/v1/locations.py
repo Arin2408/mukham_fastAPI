@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_organisation
 from app.models.user import User
 from app.schemas.location import (
     LocationCreateRequest,
@@ -26,7 +26,7 @@ router = APIRouter()
 )
 def list_locations(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     return get_locations(
         db=db,
@@ -42,7 +42,7 @@ def list_locations(
 def create_location_endpoint(
     data: LocationCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     return create_location(
         db=db,
@@ -61,7 +61,7 @@ def create_location_endpoint(
 def get_location_endpoint(
     location_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     location = get_location(
         db=db,
@@ -86,7 +86,7 @@ def update_location_endpoint(
     location_id: int,
     data: LocationUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     location = get_location(
         db=db,
@@ -117,7 +117,7 @@ def update_location_endpoint(
 def delete_location_endpoint(
     location_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     location = get_location(
         db=db,

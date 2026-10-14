@@ -47,6 +47,8 @@ PostgreSQL. Alembic owns the whole database schema.
    | `EMAIL_HOST_PASSWORD` | | Resend SMTP, for password-reset emails |
    | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | How long a signed-in device may stay idle |
    | `MIN_APP_VERSION` | `1.0.0` | Mobile app versions below this must update (`GET /app/config`) |
+   | `GEOCODING_ENABLED` | `True` | Address search for office locations (`GET /geocode/search`). Set `False` to switch it off without an app update |
+   | `GEOCODING_USER_AGENT` | `Mukham/1.0 (you@example.com)` | Sent to OpenStreetMap's Nominatim, whose policy requires the app's name and a contact |
 
 3. Create the database user and database. With Homebrew PostgreSQL the
    default superuser is your macOS user, so `postgres` may not exist yet:
@@ -82,7 +84,7 @@ All under `/api/v1`; the full list is at `/docs`.
 | Sign-in | `POST /org/login` (admin), `POST /member/login` then `/member/login/complete` (employee, after the face check), `POST /auth/refresh`, `POST /auth/logout`, `POST /org/signup`, `/forgot-password` and `/reset-password` |
 | Face check | `POST /face/liveness/create`, `POST /face/liveness/credentials` (mobile), `POST /face/liveness/result`, `POST /face/register` |
 | Attendance | `POST /attendance/mark` (employee: GPS and face token), `GET /attendance/history`, `GET /attendance/list` and `POST /attendance/manual` (admin) |
-| Admin | `GET /dashboard/summary`, employees, departments (with `/departments/leaderboard`), designations, shifts, locations, tasks |
+| Admin | `GET /dashboard/summary`, `GET /geocode/search` (address search, at most one request per second to OpenStreetMap for all users), employees, departments (with `/departments/leaderboard`), designations, shifts, locations, tasks |
 | Employee | `GET /employee-details`, `GET /tasks`, `PATCH /tasks/{id}/status` |
 | Public | `GET /app/config` (minimum mobile app version), `GET /employees/{id}/card` (ID card page), `GET /health/db` |
 

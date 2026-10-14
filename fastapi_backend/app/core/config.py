@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     # Mobile app: versions below this are told to update (GET /app/config)
     min_app_version: str = "1.0.0"
 
+    # Address search for office locations (GET /geocode/search), through
+    # OpenStreetMap's Nominatim. Switch it off here, with no app update,
+    # if OpenStreetMap asks. Their policy wants a User-Agent naming the app,
+    # with a contact address.
+    geocoding_enabled: bool = True
+    geocoding_url: str = "https://nominatim.openstreetmap.org/search"
+    geocoding_user_agent: str = "Mukham/1.0"
+
     # Employee photos (local storage; served at /media)
     media_root: Path = BASE_DIR / "media"
 

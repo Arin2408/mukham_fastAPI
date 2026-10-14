@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_current_organisation
 from app.models.department import Department
 from app.models.shift import Shift
 from app.models.user import User
@@ -100,7 +100,7 @@ def _validate(db: Session, **kwargs) -> None:
 )
 def list_shifts(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     shifts = get_shifts(
         db=db,
@@ -122,7 +122,7 @@ def list_shifts(
 def add_shift(
     data: ShiftCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     if not current_user.is_organization:
         raise HTTPException(
@@ -160,7 +160,7 @@ def update_shift_route(
     shift_id: int,
     data: ShiftUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     if not current_user.is_organization:
         raise HTTPException(
@@ -219,7 +219,7 @@ def update_shift_route(
 def delete_shift_route(
     shift_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     if not current_user.is_organization:
         raise HTTPException(
@@ -243,7 +243,7 @@ def delete_shift_route(
 def bulk_assign_shift_route(
     data: BulkAssignShiftRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_organisation),
 ):
     department = (
         db.query(Department)
