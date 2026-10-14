@@ -1,8 +1,12 @@
 # Mukham backend
 
-FastAPI backend for Mukham, on PostgreSQL. The app lives in
-`fastapi_backend/` and serves the API on port 8002. Alembic owns the whole
-database schema.
+FastAPI backend for Mukham, a workforce and attendance system that checks
+attendance with GPS (inside the office's radius) and a live face check
+(AWS Rekognition Face Liveness). It serves the web app (`../mukham_frontend`)
+and the mobile app (`../mukham_mobile`).
+
+The app lives in `fastapi_backend/` and serves the API on port 8002, on
+PostgreSQL. Alembic owns the whole database schema.
 
 ## Requirements
 
@@ -19,7 +23,11 @@ database schema.
    pip install -r requirements.txt
    ```
 
-2. Create `.env` in this folder:
+2. Create `.env` in this folder from the example, then fill it in:
+
+   ```
+   cp .env.example .env
+   ```
 
    | Variable | Example | Notes |
    | --- | --- | --- |
@@ -32,8 +40,10 @@ database schema.
    | `POSTGRES_PORT` | `5432` | |
    | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | | Rekognition (face match, liveness) and S3 |
    | `AWS_DEFAULT_REGION` | `ap-south-1` | |
+   | `AWS_IDENTITY_POOL_ID` | | Cognito identity pool; gives the mobile app short-lived credentials for its face check |
    | `MEDIA_S3_BUCKET` | | Optional. Private S3 bucket for photos and face images; unset = local folders |
-   | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated |
+   | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:8081` | Comma-separated: the web app, and the mobile dev server's web preview |
+   | `FRONTEND_URL` | `http://localhost:3000` | Links in password-reset emails |
    | `EMAIL_HOST_PASSWORD` | | Resend SMTP, for password-reset emails |
    | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | How long a signed-in device may stay idle |
    | `MIN_APP_VERSION` | `1.0.0` | Mobile app versions below this must update (`GET /app/config`) |
@@ -62,6 +72,19 @@ database schema.
 
    API docs: http://127.0.0.1:8002/docs. Database check:
    http://127.0.0.1:8002/api/v1/health/db
+
+## Main routes
+
+All under `/api/v1`; the full list is at `/docs`.
+
+| Area | Routes |
+| --- | --- |
+| Sign-in | `POST /org/login` (admin), `POST /member/login` then `/member/login/complete` (employee, after the face check), `POST /auth/refresh`, `POST /auth/logout`, `POST /org/signup`, `/forgot-password` and `/reset-password` |
+| Face check | `POST /face/liveness/create`, `POST /face/liveness/credentials` (mobile), `POST /face/liveness/result`, `POST /face/register` |
+| Attendance | `POST /attendance/mark` (employee: GPS and face token), `GET /attendance/history`, `GET /attendance/list` and `POST /attendance/manual` (admin) |
+| Admin | `GET /dashboard/summary`, employees, departments (with `/departments/leaderboard`), designations, shifts, locations, tasks |
+| Employee | `GET /employee-details`, `GET /tasks`, `PATCH /tasks/{id}/status` |
+| Public | `GET /app/config` (minimum mobile app version), `GET /employees/{id}/card` (ID card page), `GET /health/db` |
 
 ## API conventions
 
@@ -150,3 +173,11 @@ Do not use `--autogenerate`: it would try to rename them to match the models.
 
 A database created before Django was removed upgrades in place:
 `alembic upgrade head` drops the Django-only tables (`0003_drop_django_tables`).
+
+## Sibling repositories
+
+| Folder | What it is |
+| --- | --- |
+| `mukham_fastAPI` | This backend |
+| `mukham_frontend` | Web app (Next.js) |
+| `mukham_mobile` | Mobile app (Expo, React Native) |
