@@ -18,6 +18,7 @@ from app.models.security_tracking import (
 )
 from datetime import datetime, timezone
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from email.message import EmailMessage
 
@@ -36,6 +37,7 @@ from app.core.security import (
     create_member_pre_auth_token,
 )
 from app.models.employee import Employee
+from app.models.notification import PushDevice
 from app.models.user import User
 
 
@@ -325,7 +327,9 @@ def prepare_password_reset(db: Session, email: str) -> tuple[str, str, str] | No
     account matches. The caller responds the same way in both cases so the
     endpoint cannot be used to discover registered emails.
     """
-    user = db.query(User).filter(User.email == email.strip()).first()
+    # Emails are matched without regard to case: "Admin@Firm.com" is the
+    # same mailbox as "admin@firm.com".
+    user = db.query(User).filter(func.lower(User.email) == email.strip().lower()).first()
 
     if user is None or not user.is_active:
         return None
@@ -361,6 +365,16 @@ def reset_password(db: Session, token: str, new_password: str) -> None:
         raise AccountError(400, "This reset link is invalid or has expired.")
 
     user.password = hash_password(new_password)
+
+    # A reset signs the account out everywhere: if it was taken over, the
+    # other sessions end now (access tokens already issued expire within
+    # 60 minutes), and those phones stop getting notifications.
+    now = datetime.now(timezone.utc)
+    db.query(RefreshTokenFamily).filter(
+        RefreshTokenFamily.mobile_number == user.mobile_number,
+        RefreshTokenFamily.revoked_at.is_(None),
+    ).update({"revoked_at": now, "revoked_reason": "password_reset"}, synchronize_session=False)
+    db.query(PushDevice).filter(PushDevice.user_id == user.org_id).delete(synchronize_session=False)
 
     try:
         db.commit()

@@ -44,7 +44,8 @@ PostgreSQL. Alembic owns the whole database schema.
    | `MEDIA_S3_BUCKET` | | Optional. Private S3 bucket for photos and face images; unset = local folders |
    | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:8081` | Comma-separated: the web app, and the mobile dev server's web preview |
    | `FRONTEND_URL` | `http://localhost:3000` | Links in password-reset emails |
-   | `EMAIL_HOST_PASSWORD` | | Resend SMTP, for password-reset emails |
+   | `EMAIL_HOST_PASSWORD` | | Resend API key (SMTP), for password-reset emails |
+   | `DEFAULT_FROM_EMAIL` | `Mukham <no-reply@yourdomain.com>` | Sender of reset emails. Resend's test sender `onboarding@resend.dev` (the default) only delivers to the Resend account's own email; verify your domain in Resend to send to anyone |
    | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | How long a signed-in device may stay idle |
    | `MIN_APP_VERSION` | `1.0.0` | Mobile app versions below this must update (`GET /app/config`) |
    | `GEOCODING_ENABLED` | `True` | Address search for office locations (`GET /geocode/search`). Set `False` to switch it off without an app update |
