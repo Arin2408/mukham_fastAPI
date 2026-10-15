@@ -15,6 +15,7 @@ from app.services.face_verification_service import (
 )
 from app.services.employee_service import media_url
 from app.services.geofence_service import calculate_distance_meters
+from app.services.shift_service import shift_duration
 
 
 # Shift times are stored in local (India) time, as in Django's TIME_ZONE.
@@ -249,12 +250,6 @@ def mark_manual_attendance(
 
     return active_attendance
 
-def shift_duration(start: time, end: time) -> timedelta:
-    """How long a shift lasts; overnight shifts end the next day, and start == end is a full day."""
-    duration = (datetime.combine(date.min, end) - datetime.combine(date.min, start)) % timedelta(days=1)
-    return duration or timedelta(days=1)
-
-
 def shift_start_for(moment: datetime, start: time, end: time) -> datetime:
     """
     When the shift occurrence that `moment` belongs to starts (local time).
@@ -266,7 +261,7 @@ def shift_start_for(moment: datetime, start: time, end: time) -> datetime:
     local = moment.astimezone(LOCAL_TZ)
     nominal = datetime.combine(local.date(), start, tzinfo=LOCAL_TZ)
     # Half the off-hours between shifts (unchanged rule: start == end gives a 24h gap).
-    worked = (datetime.combine(date.min, end) - datetime.combine(date.min, start)) % timedelta(days=1)
+    worked = shift_duration(start, end) % timedelta(days=1)
     half_gap = (timedelta(days=1) - worked) / 2
     # The difference, moved into the window [-half_gap, 24h - half_gap).
     difference = ((local - nominal + half_gap) % timedelta(days=1)) - half_gap

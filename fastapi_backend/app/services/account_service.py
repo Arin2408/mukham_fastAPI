@@ -18,7 +18,6 @@ from app.models.security_tracking import (
 )
 from datetime import datetime, timezone
 
-from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from email.message import EmailMessage
 
@@ -88,7 +87,7 @@ def register_organisation(
     if db.query(User).filter(User.mobile_number == mobile).first():
         raise AccountError(400, "A user with this mobile number already exists.")
 
-    if db.query(User).filter(func.lower(User.email) == email.lower()).first():
+    if db.query(User).filter(User.email_is(email)).first():
         raise AccountError(400, "A user with this email already exists.")
 
     alphabet = string.ascii_letters + string.digits
@@ -327,9 +326,7 @@ def prepare_password_reset(db: Session, email: str) -> tuple[str, str, str] | No
     account matches. The caller responds the same way in both cases so the
     endpoint cannot be used to discover registered emails.
     """
-    # Emails are matched without regard to case: "Admin@Firm.com" is the
-    # same mailbox as "admin@firm.com".
-    user = db.query(User).filter(func.lower(User.email) == email.strip().lower()).first()
+    user = db.query(User).filter(User.email_is(email)).first()
 
     if user is None or not user.is_active:
         return None

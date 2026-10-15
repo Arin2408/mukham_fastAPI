@@ -56,19 +56,13 @@ def _forget(db: Session, tokens: set[str]) -> None:
         db.query(PushDevice).filter(PushDevice.token.in_(tokens)).delete(synchronize_session=False)
 
 
-def send(db: Session, messages: list[dict]) -> int:
+def send(db: Session, messages: list[dict]) -> tuple[int, bool]:
     """
     Sends Expo messages ({"to": token, "title", "body", "data", ...}).
-    Returns how many Expo accepted. Commits ticket and device changes.
-    """
-    return deliver(db, messages)[0]
-
-
-def deliver(db: Session, messages: list[dict]) -> tuple[int, bool]:
-    """
-    As send(), and also whether Expo answered at all: False means no batch got
-    through (network down, Expo failing), so the same messages can be tried
-    again later without anyone getting them twice.
+    Returns how many Expo accepted, and whether Expo answered at all: False
+    means no batch got through (network down, Expo failing), so the same
+    messages can be tried again later without anyone getting them twice.
+    Commits ticket and device changes.
     """
     if not settings.notifications_enabled or not messages:
         return 0, True

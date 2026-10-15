@@ -24,7 +24,8 @@ from app.models.employee import Employee
 from app.models.notification import NotificationPreference, NotificationSent, PushDevice
 from app.models.user import User
 from app.services import push_service
-from app.services.attendance_service import LOCAL_TZ, shift_duration, shift_start_for
+from app.services.attendance_service import LOCAL_TZ, shift_start_for
+from app.services.shift_service import shift_duration
 
 KINDS = ("shift_start", "check_out", "new_task")
 # A check-out reminder for a shift that ended long ago is no longer useful.
@@ -57,7 +58,9 @@ def register_device(db: Session, user_id: int, token: str, platform: str, instal
     device = db.query(PushDevice).filter(PushDevice.token == token).first()
     if device is None:
         db.add(PushDevice(user_id=user_id, token=token, platform=platform, install_key_hash=key_hash))
-    elif device.user_id != user_id:
+        db.commit()
+        return True
+    if device.user_id != user_id:
         if key_hash is None or (
             device.install_key_hash is not None and not hmac.compare_digest(device.install_key_hash, key_hash)
         ):
@@ -68,9 +71,8 @@ def register_device(db: Session, user_id: int, token: str, platform: str, instal
     elif device.install_key_hash is None and key_hash is not None:
         # The owner's phone, updated to an app build with install keys.
         device.install_key_hash = key_hash
-    if device is not None:
-        device.platform = platform
-        device.last_seen_at = datetime.now(LOCAL_TZ)
+    device.platform = platform
+    device.last_seen_at = datetime.now(LOCAL_TZ)
     db.commit()
     return True
 
@@ -140,7 +142,7 @@ def notify_new_task(db: Session, employee_id: int, task_id: int, title: str) -> 
     if not _wants(db, employee_id, "new_task"):
         return 0
     messages = _messages(db, employee_id, f"New task: {title}", "Tap to open it.", {"url": f"/task/{task_id}"})
-    return push_service.send(db, messages)
+    return push_service.send(db, messages)[0]
 
 
 def _shift_start_after(now: datetime, start: time) -> datetime:
@@ -229,10 +231,12 @@ def send_due_reminders(db: Session, now: datetime | None = None) -> int:
         # Claimed before sending, so two runs at once can't both send it.
         if not _claim(db, user_id, kind, ref):
             continue
-        accepted, reached = push_service.deliver(db, _messages(db, user_id, title, body, {"url": "/"}))
+        accepted, reached = push_service.send(db, _messages(db, user_id, title, body, {"url": "/"}))
         if not reached:
             # Expo couldn't be reached: try again on the next run (while the reminder is still due).
+            # The rest stay unclaimed for that run too, rather than each waiting out Expo's retries now.
             _unclaim(db, user_id, kind, ref)
+            break
         sent += accepted
     push_service.check_receipts(db)
     return sent

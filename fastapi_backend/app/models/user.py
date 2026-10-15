@@ -1,10 +1,15 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, text
+from sqlalchemy import Boolean, ColumnElement, DateTime, Index, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
+
+
+def normalize_email(email: str) -> str:
+    """Emails are compared and saved lowercase: "Admin@Firm.com" is the same mailbox as "admin@firm.com"."""
+    return email.strip().lower()
 
 
 class User(Base):
@@ -36,7 +41,12 @@ class User(Base):
     @validates("email")
     def _lowercase_email(self, _key: str, value: str) -> str:
         """Emails are saved lowercase, however they are typed, wherever they are set."""
-        return value.strip().lower() if value else value
+        return normalize_email(value) if value else value
+
+    @classmethod
+    def email_is(cls, email: str) -> ColumnElement[bool]:
+        """Filter for the account with this email, in any letter case."""
+        return func.lower(cls.email) == normalize_email(email)
 
     details: Mapped[str | None] = mapped_column(
         Text,

@@ -20,13 +20,14 @@ def is_overnight(start: time, end: time) -> bool:
     return end < start
 
 
+def shift_duration(start: time, end: time) -> timedelta:
+    """How long a shift lasts; overnight shifts end the next day, and start == end is a full day."""
+    duration = (datetime.combine(date.min, end) - datetime.combine(date.min, start)) % timedelta(days=1)
+    return duration or timedelta(days=1)
+
+
 def shift_duration_minutes(start: time, end: time) -> int:
-    today = date.today()
-    start_dt = datetime.combine(today, start)
-    end_dt = datetime.combine(today, end)
-    if end_dt <= start_dt:
-        end_dt += timedelta(days=1)
-    return int((end_dt - start_dt).total_seconds() // 60)
+    return int(shift_duration(start, end).total_seconds() // 60)
 
 
 def normalize_shift_name(name: str) -> str:
