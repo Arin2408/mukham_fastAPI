@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,8 @@ class DeviceRequest(BaseModel):
     # An Expo push token, e.g. "ExponentPushToken[xxxx]"
     token: str = Field(min_length=10, max_length=255, pattern=r"^Expo(nent)?PushToken\[.+\]$")
     platform: Literal["android", "ios"] = "android"
+    # The app install's secret (64 hex characters); missing from older app builds.
+    install_key: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class DeviceRemoveRequest(BaseModel):
@@ -41,7 +43,11 @@ def add_device(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    register_device(db, current_user.org_id, data.token, data.platform)
+    if not register_device(db, current_user.org_id, data.token, data.platform, data.install_key):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This notification address belongs to another phone.",
+        )
 
 
 # POST /api/v1/devices/remove: at sign-out, before the session ends.

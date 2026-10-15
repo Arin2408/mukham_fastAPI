@@ -4,6 +4,7 @@ import secrets
 
 from fastapi import HTTPException
 from passlib.context import CryptContext
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.employee import Employee
@@ -297,7 +298,7 @@ def create_employee(
         )
 
     if db.query(User).filter(
-        User.email == data.email
+        func.lower(User.email) == data.email.strip().lower()
     ).first():
         raise HTTPException(
             status_code=409,
@@ -413,7 +414,7 @@ def update_employee(
             duplicate = (
                 db.query(User)
                 .filter(
-                    User.email == new_email,
+                    func.lower(User.email) == new_email.strip().lower(),
                     User.org_id != user.org_id,
                 )
                 .first()

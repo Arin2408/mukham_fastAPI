@@ -61,16 +61,27 @@ def send(db: Session, messages: list[dict]) -> int:
     Sends Expo messages ({"to": token, "title", "body", "data", ...}).
     Returns how many Expo accepted. Commits ticket and device changes.
     """
+    return deliver(db, messages)[0]
+
+
+def deliver(db: Session, messages: list[dict]) -> tuple[int, bool]:
+    """
+    As send(), and also whether Expo answered at all: False means no batch got
+    through (network down, Expo failing), so the same messages can be tried
+    again later without anyone getting them twice.
+    """
     if not settings.notifications_enabled or not messages:
-        return 0
+        return 0, True
 
     accepted = 0
+    reached = False
     dead: set[str] = set()
     for start in range(0, len(messages), BATCH):
         batch = messages[start : start + BATCH]
         answer = _post(settings.expo_push_url, batch)
         if answer is None:
             continue
+        reached = True
         for message, ticket in zip(batch, answer.get("data", [])):
             if ticket.get("status") == "ok" and ticket.get("id"):
                 accepted += 1
@@ -81,7 +92,7 @@ def send(db: Session, messages: list[dict]) -> int:
                 log.warning("Expo push ticket error: %s", ticket.get("message"))
     _forget(db, dead)
     db.commit()
-    return accepted
+    return accepted, reached
 
 
 def check_receipts(db: Session, now: datetime | None = None) -> int:

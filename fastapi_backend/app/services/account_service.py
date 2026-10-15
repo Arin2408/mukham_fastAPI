@@ -88,7 +88,7 @@ def register_organisation(
     if db.query(User).filter(User.mobile_number == mobile).first():
         raise AccountError(400, "A user with this mobile number already exists.")
 
-    if db.query(User).filter(User.email == email).first():
+    if db.query(User).filter(func.lower(User.email) == email.lower()).first():
         raise AccountError(400, "A user with this email already exists.")
 
     alphabet = string.ascii_letters + string.digits

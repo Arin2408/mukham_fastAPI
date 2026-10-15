@@ -5,7 +5,9 @@ Nominatim's usage policy (operations.osmfoundation.org/policies/nominatim):
 at most one request per second for the whole application, a User-Agent
 that names the app, no search-as-you-type, and caching where possible.
 So every phone's search goes through here: one upstream request at a time,
-at least a second apart, and answers are kept for a week.
+at least a second apart, and answers are kept for a week. Answers already
+kept never wait behind a slow upstream request, and a search that can't get
+its turn soon is told to try again rather than holding a server thread.
 """
 
 import threading
@@ -22,29 +24,35 @@ MIN_INTERVAL_SECONDS = 1.1
 CACHE_SECONDS = 7 * 24 * 3600
 CACHE_SIZE = 500
 MAX_RESULTS = 5
+# How long a new search waits for its turn upstream before giving up.
+MAX_WAIT_SECONDS = 12
 
-_lock = threading.Lock()
+# _upstream: one Nominatim request at a time. _cache_lock: quick, guards _cache only.
+_upstream = threading.Lock()
+_cache_lock = threading.Lock()
 _last_request = 0.0
 _cache: "OrderedDict[str, tuple[float, list[dict]]]" = OrderedDict()
 
 
 def _cached(key: str) -> list[dict] | None:
-    hit = _cache.get(key)
-    if hit is None:
-        return None
-    stored_at, results = hit
-    if time.monotonic() - stored_at > CACHE_SECONDS:
-        _cache.pop(key, None)
-        return None
-    _cache.move_to_end(key)
-    return results
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is None:
+            return None
+        stored_at, results = hit
+        if time.monotonic() - stored_at > CACHE_SECONDS:
+            _cache.pop(key, None)
+            return None
+        _cache.move_to_end(key)
+        return results
 
 
 def _remember(key: str, results: list[dict]) -> None:
-    _cache[key] = (time.monotonic(), results)
-    _cache.move_to_end(key)
-    while len(_cache) > CACHE_SIZE:
-        _cache.popitem(last=False)
+    with _cache_lock:
+        _cache[key] = (time.monotonic(), results)
+        _cache.move_to_end(key)
+        while len(_cache) > CACHE_SIZE:
+            _cache.popitem(last=False)
 
 
 def search_places(query: str) -> list[dict]:
@@ -57,9 +65,19 @@ def search_places(query: str) -> list[dict]:
 
     key = " ".join(query.lower().split())
 
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+
     global _last_request
     # One upstream request at a time, spaced out, for every user together.
-    with _lock:
+    if not _upstream.acquire(timeout=MAX_WAIT_SECONDS):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Address search is busy. Try again in a moment, or tap the map.",
+        )
+    try:
+        # Someone may have searched the same thing while this one waited.
         cached = _cached(key)
         if cached is not None:
             return cached
@@ -95,3 +113,5 @@ def search_places(query: str) -> list[dict]:
         ]
         _remember(key, results)
         return results
+    finally:
+        _upstream.release()

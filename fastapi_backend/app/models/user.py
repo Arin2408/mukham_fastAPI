@@ -1,14 +1,16 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, text
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db.base import Base
 
 
 class User(Base):
     __tablename__ = "organisation_customuser"
+    # One account per mailbox: "Admin@Firm.com" and "admin@firm.com" are the same.
+    __table_args__ = (Index("uq_customuser_email_lower", text("lower(email)"), unique=True),)
 
     org_id: Mapped[int] = mapped_column(
         Integer,
@@ -30,6 +32,11 @@ class User(Base):
         nullable=False,
         unique=True,
     )
+
+    @validates("email")
+    def _lowercase_email(self, _key: str, value: str) -> str:
+        """Emails are saved lowercase, however they are typed, wherever they are set."""
+        return value.strip().lower() if value else value
 
     details: Mapped[str | None] = mapped_column(
         Text,

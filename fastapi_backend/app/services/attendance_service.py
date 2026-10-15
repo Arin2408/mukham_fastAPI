@@ -249,6 +249,30 @@ def mark_manual_attendance(
 
     return active_attendance
 
+def shift_duration(start: time, end: time) -> timedelta:
+    """How long a shift lasts; overnight shifts end the next day, and start == end is a full day."""
+    duration = (datetime.combine(date.min, end) - datetime.combine(date.min, start)) % timedelta(days=1)
+    return duration or timedelta(days=1)
+
+
+def shift_start_for(moment: datetime, start: time, end: time) -> datetime:
+    """
+    When the shift occurrence that `moment` belongs to starts (local time).
+
+    A moment belongs to the occurrence it is closest to: the day is split at
+    the midpoint of the off-hours between shifts. Attendance status and
+    reminders both use this, so they agree on which shift a check-in is for.
+    """
+    local = moment.astimezone(LOCAL_TZ)
+    nominal = datetime.combine(local.date(), start, tzinfo=LOCAL_TZ)
+    # Half the off-hours between shifts (unchanged rule: start == end gives a 24h gap).
+    worked = (datetime.combine(date.min, end) - datetime.combine(date.min, start)) % timedelta(days=1)
+    half_gap = (timedelta(days=1) - worked) / 2
+    # The difference, moved into the window [-half_gap, 24h - half_gap).
+    difference = ((local - nominal + half_gap) % timedelta(days=1)) - half_gap
+    return local - difference
+
+
 def calculate_attendance_status(
     employee: Employee,
     now: datetime | None = None,
@@ -265,25 +289,8 @@ def calculate_attendance_status(
         return "On Time"
 
     local_now = (now or datetime.now(timezone.utc)).astimezone(LOCAL_TZ)
-
-    shift_start = local_now.replace(
-        hour=employee.shift.shift_start_time.hour,
-        minute=employee.shift.shift_start_time.minute,
-        second=0,
-        microsecond=0,
-    )
-
-    start_t = employee.shift.shift_start_time
-    end_t = employee.shift.shift_end_time
-    duration = (
-        datetime.combine(date.min, end_t) - datetime.combine(date.min, start_t)
-    ) % timedelta(days=1)
-    half_gap = (timedelta(days=1) - duration) / 2
-
-    # Shift the difference into the window [-half_gap, 24h - half_gap).
-    difference = (
-        (local_now - shift_start + half_gap) % timedelta(days=1)
-    ) - half_gap
+    shift = employee.shift
+    difference = local_now - shift_start_for(local_now, shift.shift_start_time, shift.shift_end_time)
 
     if difference < timedelta(minutes=-15):
         return "Early"

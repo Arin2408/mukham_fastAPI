@@ -18,6 +18,8 @@ class PushDevice(Base):
     )
     token: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     platform: Mapped[str] = mapped_column(String(10), nullable=False)
+    # SHA-256 of the app install's secret (see register_device); None from older app builds.
+    install_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

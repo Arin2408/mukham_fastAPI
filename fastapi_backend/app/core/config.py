@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     # "You're still checked in" this many minutes after shift end.
     shift_reminder_minutes: int = 15
     checkout_reminder_minutes: int = 60
+    # No "Your shift starts soon" on these days: comma-separated, mon..sun
+    # (empty for none). Shifts don't record their working days yet.
+    reminder_days_off: str = "sat,sun"
 
     # Employee photos (local storage; served at /media)
     media_root: Path = BASE_DIR / "media"

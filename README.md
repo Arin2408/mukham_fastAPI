@@ -53,6 +53,7 @@ PostgreSQL. Alembic owns the whole database schema.
    | `EXPO_ACCESS_TOKEN` | | Expo access token for sending push notifications (expo.dev › Access tokens). Required once enhanced push security is on |
    | `NOTIFICATIONS_ENABLED` | `True` | `False` stops all push notifications |
    | `SHIFT_REMINDER_MINUTES`, `CHECKOUT_REMINDER_MINUTES` | `15`, `60` | When "Your shift starts soon" and "You're still checked in" are sent |
+   | `REMINDER_DAYS_OFF` | `sat,sun` | Days with no "Your shift starts soon" (comma-separated `mon`..`sun`; empty for none) |
 
 3. Create the database user and database. With Homebrew PostgreSQL the
    default superuser is your macOS user, so `postgres` may not exist yet:

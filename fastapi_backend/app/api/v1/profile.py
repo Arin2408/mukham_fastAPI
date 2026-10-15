@@ -1,5 +1,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -82,7 +83,7 @@ def update_organisation_profile(
     existing_email = (
         db.query(User)
         .filter(
-            User.email == str(data.email),
+            func.lower(User.email) == str(data.email).strip().lower(),
             User.org_id != org_id,
         )
         .first()

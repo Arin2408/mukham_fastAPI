@@ -11,7 +11,9 @@ Each reminder is recorded in notifications_sent, so the job can run as often
 as it likes (every 5 minutes is the plan) without sending one twice.
 """
 
-from datetime import date, datetime, time, timedelta
+import hashlib
+import hmac
+from datetime import datetime, time, timedelta
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -22,27 +24,55 @@ from app.models.employee import Employee
 from app.models.notification import NotificationPreference, NotificationSent, PushDevice
 from app.models.user import User
 from app.services import push_service
-from app.services.attendance_service import LOCAL_TZ
+from app.services.attendance_service import LOCAL_TZ, shift_duration, shift_start_for
 
 KINDS = ("shift_start", "check_out", "new_task")
 # A check-out reminder for a shift that ended long ago is no longer useful.
 STALE_AFTER = timedelta(hours=12)
 # Any check-in this long before a shift starts counts as being in for it.
 EARLY_CHECK_IN = timedelta(hours=12)
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _days_off() -> set[int]:
+    """settings.reminder_days_off as weekday numbers (Monday is 0); unknown names are ignored."""
+    names = (part.strip().lower()[:3] for part in settings.reminder_days_off.split(","))
+    return {WEEKDAYS.index(name) for name in names if name in WEEKDAYS}
 
 
 # ---------------------------------------------------------------- devices
 
-def register_device(db: Session, user_id: int, token: str, platform: str) -> None:
-    """Saves this phone's token for the signed-in person (moving it if someone else used the phone)."""
+def _hash_key(install_key: str | None) -> str | None:
+    return hashlib.sha256(install_key.encode()).hexdigest() if install_key else None
+
+
+def register_device(db: Session, user_id: int, token: str, platform: str, install_key: str | None = None) -> bool:
+    """
+    Saves this phone's token for the signed-in person. A token already saved
+    for someone else moves only with the same install key it was saved with:
+    the phone's own secret, so the next person on that phone can take it over
+    but a person who merely knows the token can't. False if refused.
+    """
+    key_hash = _hash_key(install_key)
     device = db.query(PushDevice).filter(PushDevice.token == token).first()
     if device is None:
-        db.add(PushDevice(user_id=user_id, token=token, platform=platform))
-    else:
+        db.add(PushDevice(user_id=user_id, token=token, platform=platform, install_key_hash=key_hash))
+    elif device.user_id != user_id:
+        if key_hash is None or (
+            device.install_key_hash is not None and not hmac.compare_digest(device.install_key_hash, key_hash)
+        ):
+            return False
+        # Same phone, next person (or an address saved by an older app build, now claimed with a key).
         device.user_id = user_id
+        device.install_key_hash = key_hash
+    elif device.install_key_hash is None and key_hash is not None:
+        # The owner's phone, updated to an app build with install keys.
+        device.install_key_hash = key_hash
+    if device is not None:
         device.platform = platform
         device.last_seen_at = datetime.now(LOCAL_TZ)
     db.commit()
+    return True
 
 
 def unregister_device(db: Session, user_id: int, token: str) -> None:
@@ -97,6 +127,14 @@ def _claim(db: Session, user_id: int, kind: str, ref: str) -> bool:
         return False
 
 
+def _unclaim(db: Session, user_id: int, kind: str, ref: str) -> None:
+    """Sending failed: forget the record so the next run tries again."""
+    db.query(NotificationSent).filter(
+        NotificationSent.user_id == user_id, NotificationSent.kind == kind, NotificationSent.ref == ref
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
 def notify_new_task(db: Session, employee_id: int, task_id: int, title: str) -> int:
     """Called right after an admin assigns a task."""
     if not _wants(db, employee_id, "new_task"):
@@ -112,17 +150,8 @@ def _shift_start_after(now: datetime, start: time) -> datetime:
 
 
 def _shift_end_for(check_in: datetime, start: time, end: time) -> datetime:
-    """When the shift that `check_in` belongs to ends (overnight shifts end the next day)."""
-    local = check_in.astimezone(LOCAL_TZ)
-    shift_day: date = local.date()
-    # Checked in just after midnight for a shift that started the evening before.
-    if end < start and local.time() < end:
-        shift_day -= timedelta(days=1)
-    starts = datetime.combine(shift_day, start, tzinfo=LOCAL_TZ)
-    ends = datetime.combine(shift_day, end, tzinfo=LOCAL_TZ)
-    if ends <= starts:
-        ends += timedelta(days=1)
-    return ends
+    """When the shift that `check_in` belongs to ends: the same shift attendance counts it for."""
+    return shift_start_for(check_in, start, end) + shift_duration(start, end)
 
 
 def due_reminders(db: Session, now: datetime) -> list[tuple[int, str, str, str, str]]:
@@ -143,6 +172,7 @@ def due_reminders(db: Session, now: datetime) -> list[tuple[int, str, str, str, 
     )
     before = timedelta(minutes=settings.shift_reminder_minutes)
     after = timedelta(minutes=settings.checkout_reminder_minutes)
+    days_off = _days_off()
     due = []
 
     for employee in employees:
@@ -156,9 +186,9 @@ def due_reminders(db: Session, now: datetime) -> list[tuple[int, str, str, str, 
             .first()
         )
 
-        # Shift starting soon, and not checked in for it.
+        # Shift starting soon, on a working day, and not checked in for it.
         starts = _shift_start_after(now, shift.shift_start_time)
-        if starts - now <= before and open_record is None:
+        if starts - now <= before and open_record is None and starts.weekday() not in days_off:
             already_in = (
                 db.query(Attendance.id)
                 .filter(Attendance.employee_id == employee.user_id, Attendance.check_in >= starts - EARLY_CHECK_IN)
@@ -196,8 +226,13 @@ def send_due_reminders(db: Session, now: datetime | None = None) -> int:
     for user_id, kind, ref, title, body in due_reminders(db, now):
         if not _wants(db, user_id, kind):
             continue
+        # Claimed before sending, so two runs at once can't both send it.
         if not _claim(db, user_id, kind, ref):
             continue
-        sent += push_service.send(db, _messages(db, user_id, title, body, {"url": "/"}))
+        accepted, reached = push_service.deliver(db, _messages(db, user_id, title, body, {"url": "/"}))
+        if not reached:
+            # Expo couldn't be reached: try again on the next run (while the reminder is still due).
+            _unclaim(db, user_id, kind, ref)
+        sent += accepted
     push_service.check_receipts(db)
     return sent
