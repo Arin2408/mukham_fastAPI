@@ -1,6 +1,7 @@
 
 import logging
 import secrets
+import string
 
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -18,8 +19,11 @@ from app.services.storage import face_store, media_store
 logger = logging.getLogger(__name__)
 
 
-# No look-alike characters (0/O, 1/l/I), since it is read out or typed in.
-MEMBER_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+# Lowercase letters and digits without look-alikes (0/o, 1/l/i), since it
+# is read out or typed in.
+MEMBER_PASSWORD_ALPHABET = "".join(
+    c for c in string.ascii_lowercase + string.digits if c not in "01ilo"
+)
 
 
 password_context = CryptContext(
