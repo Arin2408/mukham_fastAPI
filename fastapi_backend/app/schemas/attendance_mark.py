@@ -16,7 +16,7 @@ class AttendanceMarkRequest(BaseModel):
 
     # Returned by POST /face/verify (web) or /face/liveness/result (mobile)
     # after a successful server-side match.
-    face_token: str | None = None
+    face_token: str | None = Field(default=None, max_length=2048)
 
     # Mobile app only: Android reported a GPS-faking app; which device.
     # Recorded and flagged for the admin, not used to reject the check-in.
@@ -24,8 +24,8 @@ class AttendanceMarkRequest(BaseModel):
     device_id: str | None = Field(default=None, max_length=100)
 
     # Sent by older clients; ignored - the server decides these.
-    location_status: str | None = None
-    face_status: str | None = None
+    location_status: str | None = Field(default=None, max_length=50)
+    face_status: str | None = Field(default=None, max_length=50)
 
 
 class AttendanceMarkResponse(BaseModel):

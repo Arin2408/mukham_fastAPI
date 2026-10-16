@@ -1,6 +1,6 @@
 from datetime import time
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class OrganisationProfileResponse(BaseModel):
@@ -14,9 +14,9 @@ class OrganisationProfileResponse(BaseModel):
 
 
 class OrganisationProfileUpdate(BaseModel):
-    name: str
-    email: EmailStr
-    details: str | None = None
+    name: str = Field(max_length=255)
+    email: EmailStr = Field(max_length=254)
+    details: str | None = Field(default=None, max_length=5000)
 
 
 class EmployeeOfficeLocation(BaseModel):

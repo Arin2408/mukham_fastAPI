@@ -1,5 +1,6 @@
 import base64
 import logging
+import secrets
 
 import boto3
 from botocore import UNSIGNED
@@ -42,6 +43,10 @@ rekognition = boto3.client(
 
 
 ATTENDANCE_FACE_MIN_SIMILARITY = 90
+
+# What the app sees when AWS or the server fails; the details go to the log.
+FACE_CHECK_FAILED = "Face verification failed. Please try again."
+FACE_CHECK_START_FAILED = "Could not start the face check. Please try again."
 
 
 def normalize_mobile(mobile_number: str) -> str:
@@ -170,10 +175,7 @@ def verify_face(
             return {
                 "status_code": 400,
                 "body": {
-                    "error": (
-                        "Face verification failed: "
-                        f"{e.response['Error']['Message']}"
-                    )
+                    "error": FACE_CHECK_FAILED
                 },
             }
 
@@ -224,13 +226,13 @@ def verify_face(
             },
         }
 
-    except Exception as e:
+    except Exception:
         logger.exception("Face verify failed")
 
         return {
             "status_code": 500,
             "body": {
-                "error": f"Internal Error: {str(e)}"
+                "error": FACE_CHECK_FAILED
             },
         }
 
@@ -248,18 +250,20 @@ def create_liveness_session() -> dict:
         }
 
     except ClientError as e:
+        logger.warning("Liveness session: AWS error: %s", e)
         return {
             "status_code": 400,
             "body": {
-                "error": e.response["Error"]["Message"]
+                "error": FACE_CHECK_START_FAILED
             },
         }
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Liveness session failed")
         return {
             "status_code": 500,
             "body": {
-                "error": str(e)
+                "error": FACE_CHECK_START_FAILED
             },
         }
 
@@ -509,10 +513,11 @@ def get_liveness_result(
             )
 
         except ClientError as e:
+            logger.warning("Liveness compare: AWS error: %s", e)
             return {
                 "status_code": 400,
                 "body": {
-                    "error": e.response["Error"]["Message"]
+                    "error": FACE_CHECK_FAILED
                 },
             }
 
@@ -550,20 +555,21 @@ def get_liveness_result(
         }
 
     except ClientError as e:
+        logger.warning("Liveness result: AWS error: %s", e)
         return {
             "status_code": 400,
             "body": {
-                "error": e.response["Error"]["Message"]
+                "error": FACE_CHECK_FAILED
             },
         }
 
-    except Exception as e:
+    except Exception:
         logger.exception("Liveness result error")
 
         return {
             "status_code": 500,
             "body": {
-                "error": str(e)
+                "error": FACE_CHECK_FAILED
             },
         }
 
@@ -638,16 +644,25 @@ def sync_employee_photo(
         if employee is None:
             return
 
-        # Same location and naming Django's ImageField used.
-        relative_path = f"employee_photos/face_{normalized}.jpg"
+        # A new name for every photo: phones and browsers keep pictures by
+        # address, so reusing one would keep showing the old face. The
+        # random part also means nobody can guess it from a phone number.
+        relative_path = f"employee_photos/face_{normalized}_{secrets.token_hex(8)}.jpg"
         media_store.save(
             relative_path,
             resize_photo(image_bytes),
             "image/jpeg",
         )
 
+        previous = employee.photo
         employee.photo = relative_path
         db.commit()
+
+        if previous and previous.startswith("employee_photos/face_") and previous != relative_path:
+            try:
+                media_store.delete(previous)
+            except Exception as e:
+                logger.warning("Could not delete old photo %s: %s", previous, e)
 
     except Exception as e:
         db.rollback()

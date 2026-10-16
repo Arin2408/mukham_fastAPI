@@ -3,10 +3,10 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class EmployeeCreateRequest(BaseModel):
-    mobile_number: str
-    email: str
-    first_name: str
-    last_name: str
+    mobile_number: str = Field(max_length=20)
+    email: str = Field(max_length=254)
+    first_name: str = Field(max_length=255)
+    last_name: str = Field(max_length=255)
     department: int | None = None
     designation: int | None = None
     shift: int | None = None
@@ -18,10 +18,10 @@ class EmployeeCreateRequest(BaseModel):
 
 
 class EmployeeUpdateRequest(BaseModel):
-    mobile_number: str | None = None
-    email: str | None = None
-    first_name: str | None = None
-    last_name: str | None = None
+    mobile_number: str | None = Field(default=None, max_length=20)
+    email: str | None = Field(default=None, max_length=254)
+    first_name: str | None = Field(default=None, max_length=255)
+    last_name: str | None = Field(default=None, max_length=255)
     department: int | None = None
     designation: int | None = None
     shift: int | None = None

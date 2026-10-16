@@ -1,13 +1,14 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.core.errors import error_response
 from app.db.session import get_db
 from app.core.errors import ApiError
+from app.core.rate_limit import client_ip, limit
 from app.core.security import create_face_token
 from app.dependencies.auth import (
     LivenessCaller,
@@ -38,6 +39,10 @@ from app.services.face_service import (
 )
 
 router = APIRouter()
+
+# Each face check is a paid AWS call: per person, 20 in 10 minutes is far
+# more than signing in and checking in ever need.
+FACE_CHECKS = (20, 10 * 60)
 
 
 def _service_response(status_code: int, body: dict) -> JSONResponse:
@@ -102,6 +107,7 @@ def verify_face_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     _require_employee(current_user)
+    limit(f"face:{current_user.org_id}", *FACE_CHECKS)
 
     result = verify_face(
         db=db,
@@ -132,6 +138,7 @@ def create_liveness_session_endpoint(
 ):
     current_user = caller.user
     _require_employee(current_user)
+    limit(f"face:{current_user.org_id}", *FACE_CHECKS)
 
     result = create_liveness_session()
 
@@ -174,6 +181,7 @@ def liveness_credentials_endpoint(
     caller: LivenessCaller = Depends(get_liveness_caller),
 ):
     _require_employee(caller.user)
+    limit(f"face-credentials:{caller.user.org_id}", *FACE_CHECKS)
 
     result = get_liveness_credentials()
     return _service_response(result["status_code"], result["body"])
@@ -291,8 +299,10 @@ def get_liveness_result_endpoint(
 @router.post("/face/check-status")
 def face_check_status_endpoint(
     request: FaceStatusRequest,
+    http: Request,
     db: Session = Depends(get_db),
 ):
+    limit(f"lookup:{client_ip(http)}", 60, 60)
     result = check_face_status(
         db=db,
         mobile_number=request.mobile_number,
@@ -308,11 +318,20 @@ def face_register_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Only an admin may set a face from a photo. Employees enrol through the
+    # live face check at their first sign-in; letting them upload a photo
+    # would let them swap in someone else's face.
+    if not current_user.is_organization:
+        raise HTTPException(
+            status_code=403,
+            detail="Organization access required",
+        )
     _require_face_access(
         db,
         current_user,
         request.mobile_number,
     )
+    limit(f"face:{current_user.org_id}", *FACE_CHECKS)
 
     result = register_face_image(
         db=db,

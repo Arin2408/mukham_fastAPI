@@ -9,6 +9,7 @@ class LoginRequest(BaseModel):
 
     password: str = Field(
         min_length=1,
+        max_length=128,
     )
 
     # Optional label for the signed-in device, e.g. "Pixel 8" (mobile app).

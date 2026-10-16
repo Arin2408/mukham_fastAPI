@@ -23,8 +23,13 @@ class Settings(BaseSettings):
     # device can stay idle before it must sign in again.
     refresh_token_expire_days: int = 30
 
-    # DEBUG=True enables the /debug/* routes.
+    # DEBUG=True enables the /debug/* routes (from this computer only) and
+    # the API docs at /docs.
     debug: bool = False
+
+    # Limits on repeated sign-in, sign-up, password-reset and face-check
+    # requests (app/core/rate_limit.py). Turn off only for load tests.
+    rate_limit_enabled: bool = True
 
     # AWS
     aws_access_key_id: str | None = None

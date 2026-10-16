@@ -126,11 +126,10 @@ def login_organisation(
     mobile = normalize_mobile(mobile_number)
     user = db.query(User).filter(User.mobile_number == mobile).first()
 
-    if user is None:
-        raise AccountError(404, "User not found")
-
-    if not user.is_active or not _safe_verify(password, user.password):
-        raise AccountError(401, "Invalid password")
+    # One answer for an unknown number and a wrong password, so this can't
+    # be used to find out which numbers have accounts.
+    if user is None or not user.is_active or not _safe_verify(password, user.password):
+        raise AccountError(401, "Invalid mobile number or password")
 
     role = "organization" if user.is_organization else "employee"
 
@@ -372,6 +371,74 @@ def reset_password(db: Session, token: str, new_password: str) -> None:
         RefreshTokenFamily.revoked_at.is_(None),
     ).update({"revoked_at": now, "revoked_reason": "password_reset"}, synchronize_session=False)
     db.query(PushDevice).filter(PushDevice.user_id == user.org_id).delete(synchronize_session=False)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+# --------------------------------------------------
+# CHANGE PASSWORD (signed in)
+# --------------------------------------------------
+
+def change_password(
+    db: Session,
+    user: User,
+    current_password: str,
+    new_password: str,
+    refresh_token: str | None = None,
+    push_token: str | None = None,
+) -> None:
+    """
+    Change the signed-in person's password: the admin's sign-in password, or
+    the employee's member password. Every other signed-in device is signed
+    out and stops getting notifications; this device (its refresh token and
+    push token, when sent) stays signed in.
+    """
+    employee = None
+    if user.is_organization:
+        current_hash = user.password
+    else:
+        employee = db.query(Employee).filter(Employee.user_id == user.org_id).first()
+        if employee is None:
+            raise AccountError(404, "Employee profile not found")
+        current_hash = employee.member_password
+
+    if not _safe_verify(current_password, current_hash):
+        raise AccountError(400, "Current password is incorrect.")
+
+    if new_password == current_password:
+        raise AccountError(400, "The new password must be different from the current one.")
+
+    if employee is not None:
+        employee.member_password = hash_password(new_password)
+    else:
+        user.password = hash_password(new_password)
+
+    # This device's session, if it sent one that really is this person's.
+    keep_family = None
+    payload = decode_refresh_token(refresh_token) if refresh_token else None
+    if payload and str(payload.get("mobile_number")) == user.mobile_number:
+        keep_family = payload.get("fam")
+
+    now = datetime.now(timezone.utc)
+    others = db.query(RefreshTokenFamily).filter(
+        RefreshTokenFamily.mobile_number == user.mobile_number,
+        RefreshTokenFamily.revoked_at.is_(None),
+    )
+    if keep_family:
+        others = others.filter(RefreshTokenFamily.family_id != keep_family)
+    others.update(
+        {"revoked_at": now, "revoked_reason": "password_change"},
+        synchronize_session=False,
+    )
+
+    devices = db.query(PushDevice).filter(PushDevice.user_id == user.org_id)
+    if push_token:
+        devices = devices.filter(PushDevice.token != push_token)
+    devices.delete(synchronize_session=False)
 
     try:
         db.commit()

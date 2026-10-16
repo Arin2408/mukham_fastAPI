@@ -1,9 +1,9 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.core.errors import register_error_handlers
+from app.core.errors import error_response, register_error_handlers
 from app.services.storage import uses_s3
 
 from app.api.v1.health import router as health_router
@@ -29,7 +29,34 @@ from app.api.v1.notifications import router as notifications_router
 app = FastAPI(
     title="Mukham API",
     version="1.0.0",
+    # The API's map is for developers, not for the public internet.
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
 )
+
+# Bigger than any real request (a face photo is a few MB as base64).
+MAX_BODY_BYTES = 12 * 1024 * 1024
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > MAX_BODY_BYTES:
+        response = error_response(413, {"detail": "Request is too large."})
+    else:
+        response = await call_next(request)
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
 
 # Every error response carries `code` and `message` (app/core/errors.py).
 register_error_handlers(app)
@@ -157,12 +184,19 @@ app.include_router(
 )
 
 
-# Unauthenticated data dumps - never expose outside local development.
+def _from_this_computer(request: Request) -> None:
+    if not request.client or request.client.host not in ("127.0.0.1", "::1"):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+# Unauthenticated data dumps - never expose outside local development, and
+# even with DEBUG on, only to requests from this computer.
 if settings.debug:
     app.include_router(
         debug_router,
         prefix="/api/v1",
         tags=["Debug"],
+        dependencies=[Depends(_from_this_computer)],
     )
 
 

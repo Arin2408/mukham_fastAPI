@@ -18,6 +18,10 @@ from app.services.storage import face_store, media_store
 logger = logging.getLogger(__name__)
 
 
+# No look-alike characters (0/O, 1/l/I), since it is read out or typed in.
+MEMBER_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
 password_context = CryptContext(
     schemes=["django_pbkdf2_sha256"],
     deprecated="auto",
@@ -141,7 +145,12 @@ def validate_employee_relations(
     designation_id: int | None,
     shift_id: int | None,
     location_id: int | None,
+    same_department: bool = True,
 ) -> None:
+    """
+    Everything must be the organisation's own. With same_department, the
+    designation and shift must also belong to the chosen department.
+    """
 
     if department_id is not None:
         department = (
@@ -176,6 +185,12 @@ def validate_employee_relations(
                 detail="Invalid designation selected",
             )
 
+        if same_department and designation.department_id != department_id:
+            raise HTTPException(
+                status_code=400,
+                detail="This designation belongs to another department. Choose one from the employee's department.",
+            )
+
     if shift_id is not None:
         shift = (
             db.query(Shift)
@@ -191,6 +206,12 @@ def validate_employee_relations(
             raise HTTPException(
                 status_code=400,
                 detail="Invalid shift selected",
+            )
+
+        if same_department and shift.department_id != department_id:
+            raise HTTPException(
+                status_code=400,
+                detail="This shift belongs to another department. Choose one from the employee's department.",
             )
 
     if location_id is not None:
@@ -319,8 +340,10 @@ def create_employee(
         manager_id=data.manager,
     )
 
-    plain_member_password = (
-        f"{mobile[:5]}{data.first_name[:5]}".lower()
+    # Random, so nobody can work it out from the employee's number and
+    # name. Shown to the admin once, to pass on.
+    plain_member_password = "".join(
+        secrets.choice(MEMBER_PASSWORD_ALPHABET) for _ in range(10)
     )
 
     try:
@@ -461,6 +484,9 @@ def update_employee(
             designation_id=designation_id,
             shift_id=shift_id,
             location_id=location_id,
+            # Only when one of them changes, so an employee saved before
+            # this check can still have their name or number edited.
+            same_department=bool({"department", "designation", "shift"} & values.keys()),
         )
 
         employee.department_id = department_id

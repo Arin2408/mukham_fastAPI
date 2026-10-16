@@ -1,7 +1,8 @@
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import client_ip, limit
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.employee import Employee
@@ -224,8 +225,11 @@ def remove_employee(
 )
 def employee_card(
     employee_id: int,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    # Public: slow down anyone stepping through ids to list everyone.
+    limit(f"card:{client_ip(request)}", 60, 60)
     employee = (
         db.query(Employee)
         .filter(Employee.user_id == employee_id)

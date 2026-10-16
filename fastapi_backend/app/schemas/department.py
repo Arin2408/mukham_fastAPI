@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DepartmentResponse(BaseModel):
@@ -11,12 +11,12 @@ class DepartmentResponse(BaseModel):
 
 
 class DepartmentCreateRequest(BaseModel):
-    details: str
+    details: str = Field(max_length=255)
     location: int
 
 
 class DepartmentUpdateRequest(BaseModel):
-    details: str | None = None
+    details: str | None = Field(default=None, max_length=255)
     location: int | None = None
 
 

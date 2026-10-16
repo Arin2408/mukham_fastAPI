@@ -4,8 +4,8 @@ from pydantic import BaseModel, Field
 class OrgSignupRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     mobile_number: str = Field(min_length=1, max_length=20)
-    email: str | None = None
-    details: str | None = None
+    email: str | None = Field(default=None, max_length=254)
+    details: str | None = Field(default=None, max_length=5000)
 
 
 class OrgSignupResponse(BaseModel):
@@ -16,7 +16,7 @@ class OrgSignupResponse(BaseModel):
 
 class MobileLoginRequest(BaseModel):
     mobile_number: str = Field(min_length=1, max_length=20)
-    password: str = Field(min_length=1)
+    password: str = Field(min_length=1, max_length=128)
 
     # Optional label for the signed-in device, e.g. "Pixel 8" (mobile app).
     device_name: str | None = Field(default=None, max_length=100)
@@ -70,7 +70,7 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    token: str = Field(min_length=1)
+    token: str = Field(min_length=1, max_length=2048)
     password: str = Field(min_length=8, max_length=128)
 
 
@@ -79,7 +79,7 @@ class MessageResponse(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh: str = Field(min_length=1)
+    refresh: str = Field(min_length=1, max_length=2048)
 
 
 class RefreshResponse(BaseModel):
@@ -99,3 +99,13 @@ class MemberLoginCompleteRequest(BaseModel):
 
     # Optional label for the signed-in device, e.g. "Pixel 8" (mobile app).
     device_name: str | None = Field(default=None, max_length=100)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+    # This device's refresh token, so it stays signed in while every other
+    # device is signed out. Without it, all devices are signed out.
+    refresh: str | None = Field(default=None, max_length=2048)
+    # This phone's push token, so it keeps getting notifications.
+    push_token: str | None = Field(default=None, max_length=255)

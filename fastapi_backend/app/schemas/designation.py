@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DesignationResponse(BaseModel):
@@ -13,9 +13,9 @@ class DesignationResponse(BaseModel):
 
 class DesignationCreateRequest(BaseModel):
     department: int
-    details: str
+    details: str = Field(max_length=255)
 
 
 class DesignationUpdateRequest(BaseModel):
     department: int | None = None
-    details: str | None = None
+    details: str | None = Field(default=None, max_length=255)

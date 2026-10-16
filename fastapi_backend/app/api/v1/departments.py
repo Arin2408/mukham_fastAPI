@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.dependencies.auth import get_current_organisation
 from app.models.department import Department
+from app.models.location import Location
 from app.models.user import User
 from app.schemas.department import (
     DepartmentCreateRequest,
@@ -20,6 +21,20 @@ from app.services.department_service import (
 )
 
 router = APIRouter()
+
+
+def _require_own_location(db: Session, location_id: int, org_id: int) -> None:
+    """A department can only be placed at one of the organisation's own offices."""
+    exists = (
+        db.query(Location.location_id)
+        .filter(Location.location_id == location_id, Location.org_id == org_id)
+        .first()
+    )
+    if exists is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid location selected",
+        )
 
 
 @router.get(
@@ -46,6 +61,7 @@ def add_department(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_organisation),
 ):
+    _require_own_location(db, data.location, current_user.org_id)
     return create_department(
         db=db,
         org_id=current_user.org_id,
@@ -78,6 +94,9 @@ def update_department_route(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Department not found",
         )
+
+    if data.location is not None:
+        _require_own_location(db, data.location, current_user.org_id)
 
     return update_department(
         db=db,

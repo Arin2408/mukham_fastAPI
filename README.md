@@ -32,7 +32,7 @@ PostgreSQL. Alembic owns the whole database schema.
    | Variable | Example | Notes |
    | --- | --- | --- |
    | `SECRET_KEY` | long random string | Signs JWTs and password-reset tokens |
-   | `DEBUG` | `False` | `True` also enables the `/api/v1/debug/*` routes |
+   | `DEBUG` | `False` | `True` also enables the API docs at `/docs` and the `/api/v1/debug/*` routes (from this computer only). Keep `False` on servers |
    | `POSTGRES_DB` | `mukham_db` | |
    | `POSTGRES_USER` | `postgres` | |
    | `POSTGRES_PASSWORD` | | |
@@ -54,6 +54,7 @@ PostgreSQL. Alembic owns the whole database schema.
    | `NOTIFICATIONS_ENABLED` | `True` | `False` stops all push notifications |
    | `SHIFT_REMINDER_MINUTES`, `CHECKOUT_REMINDER_MINUTES` | `15`, `60` | When "Your shift starts soon" and "You're still checked in" are sent |
    | `REMINDER_DAYS_OFF` | `sat,sun` | Days with no "Your shift starts soon" (comma-separated `mon`..`sun`; empty for none) |
+   | `RATE_LIMIT_ENABLED` | `True` | Limits repeated sign-in, sign-up, password-reset and face-check requests. Leave on |
 
 3. Create the database user and database. With Homebrew PostgreSQL the
    default superuser is your macOS user, so `postgres` may not exist yet:
@@ -77,12 +78,12 @@ PostgreSQL. Alembic owns the whole database schema.
    python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8002
    ```
 
-   API docs: http://127.0.0.1:8002/docs. Database check:
+   API docs (with `DEBUG=True`): http://127.0.0.1:8002/docs. Database check:
    http://127.0.0.1:8002/api/v1/health/db
 
 ## Main routes
 
-All under `/api/v1`; the full list is at `/docs`.
+All under `/api/v1`; the full list is at `/docs` (with `DEBUG=True`).
 
 | Area | Routes |
 | --- | --- |

@@ -1,6 +1,8 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
-from app.dependencies.auth import get_current_member_pre_auth
+
+from app.core.rate_limit import client_ip, limit
+from app.dependencies.auth import get_current_member_pre_auth, get_current_user
 from app.models.user import User
 from app.services.account_service import (
     login_member,
@@ -9,6 +11,7 @@ from app.services.account_service import (
 
 from app.db.session import get_db
 from app.schemas.account import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     MemberLoginResponse,
     MessageResponse,
@@ -26,7 +29,9 @@ from app.schemas.account import (
 )
 from app.services.account_service import (
     AccountError,
+    change_password,
     check_registration_status,
+    normalize_mobile,
     end_session,
     login_member,
     login_organisation,
@@ -39,6 +44,13 @@ from app.services.account_service import (
 
 
 router = APIRouter()
+
+# Per account: 10 password tries in 15 minutes, whichever sign-in route.
+LOGIN_TRIES = (10, 15 * 60)
+
+
+def limit_login(mobile_number: str) -> None:
+    limit(f"login:{normalize_mobile(mobile_number)}", *LOGIN_TRIES)
 
 
 def _raise(error: AccountError):
@@ -65,8 +77,10 @@ def _raise(error: AccountError):
 )
 def org_signup(
     data: OrgSignupRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit(f"signup:{client_ip(request)}", 5, 60 * 60)
     try:
         user, generated_password = register_organisation(
             db=db,
@@ -97,6 +111,7 @@ def org_login(
     data: MobileLoginRequest,
     db: Session = Depends(get_db),
 ):
+    limit_login(data.mobile_number)
     try:
         return login_organisation(
             db, data.mobile_number, data.password, data.device_name
@@ -118,6 +133,7 @@ def member_login(
     data: MobileLoginRequest,
     db: Session = Depends(get_db),
 ):
+    limit_login(data.mobile_number)
     try:
         return login_member(db, data.mobile_number, data.password)
     except AccountError as error:
@@ -156,8 +172,10 @@ def member_login_complete(
 )
 def member_check_registration(
     data: MobileNumberRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit(f"lookup:{client_ip(request)}", 60, 60)
     try:
         return check_registration_status(db, data.mobile_number)
     except AccountError as error:
@@ -175,8 +193,11 @@ def member_check_registration(
 def forgot_password(
     data: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit(f"forgot:{client_ip(request)}", 20, 60 * 60)
+    limit(f"forgot:{data.email.strip().lower()}", 3, 60 * 60)
     email = prepare_password_reset(db, data.email)
 
     if email is not None:
@@ -198,8 +219,10 @@ def forgot_password(
 )
 def reset_password_endpoint(
     data: ResetPasswordRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit(f"reset:{client_ip(request)}", 20, 15 * 60)
     try:
         reset_password(db, data.token, data.password)
     except AccountError as error:
@@ -239,3 +262,34 @@ def logout(
 ):
     end_session(db, data.refresh)
     return {"message": "Signed out"}
+
+
+# --------------------------------------------------
+# POST /api/v1/auth/change-password
+# The signed-in admin's or employee's own password. Other devices are
+# signed out; this one stays signed in when it sends its refresh token.
+# --------------------------------------------------
+
+@router.post(
+    "/auth/change-password",
+    response_model=MessageResponse,
+)
+def change_password_endpoint(
+    data: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    limit(f"change-password:{current_user.org_id}", 10, 15 * 60)
+    try:
+        change_password(
+            db,
+            current_user,
+            data.current_password,
+            data.new_password,
+            data.refresh,
+            data.push_token,
+        )
+    except AccountError as error:
+        _raise(error)
+
+    return {"message": "Password changed. Other devices have been signed out."}

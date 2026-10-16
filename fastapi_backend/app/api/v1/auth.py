@@ -10,6 +10,7 @@ from app.services.auth_service import (
     authenticate_user,
     create_tokens,
 )
+from app.api.v1.accounts import limit_login
 from app.dependencies.auth import get_current_user
 from app.models.user import User
 
@@ -38,6 +39,7 @@ def login(
     data: LoginRequest,
     db: Session = Depends(get_db),
 ):
+    limit_login(data.mobile_number)
     user = authenticate_user(
         db=db,
         mobile_number=data.mobile_number,
