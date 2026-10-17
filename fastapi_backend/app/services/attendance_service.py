@@ -418,8 +418,9 @@ def mark_attendance(
     action="checkout" -> only checks out (404 when nothing is open)
     no action         -> legacy toggle
 
-    Check-in requires a server face match (face_token) and a GPS position
-    inside the office radius. Check-out is never blocked, only flagged.
+    Check-in requires a server face match (face_token), a real GPS position
+    (no fake-GPS app) inside the office radius. Check-out is never blocked,
+    only flagged.
 
     Returns (attendance, "check_in" | "check_out", office, distance).
     """
@@ -480,6 +481,14 @@ def mark_attendance(
     # CHECK-IN
     # ---------------------------------------------------------
     verify_attendance_face(face_token=face_token, mobile_number=mobile_number)
+
+    # The phone reports a fake-GPS (mock location) app; refuse rather than
+    # only flag it. Check-out stays flag-only so nobody is stuck checked in.
+    if is_mocked:
+        raise LocationValidationError(
+            "Fake location detected. Turn off any fake GPS or mock location "
+            "app and try again."
+        )
 
     if not _usable_gps(latitude, longitude):
         raise LocationValidationError(

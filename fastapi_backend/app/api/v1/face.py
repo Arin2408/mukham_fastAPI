@@ -22,8 +22,6 @@ from app.schemas.face import (
     FaceDetailsResponse,
     FaceRegisterRequest,
     FaceStatusRequest,
-    FaceVerifyRequest,
-    FaceVerifyResponse,
     LivenessCreateResponse,
     LivenessResultRequest,
 )
@@ -35,7 +33,6 @@ from app.services.face_service import (
     get_liveness_result,
     normalize_mobile,
     register_face_image,
-    verify_face,
 )
 
 router = APIRouter()
@@ -94,37 +91,6 @@ def _require_face_access(
             status_code=404,
             detail="Employee not found",
         )
-
-
-# POST /api/v1/face/verify
-@router.post(
-    "/face/verify",
-    response_model=FaceVerifyResponse,
-)
-def verify_face_endpoint(
-    request: FaceVerifyRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    _require_employee(current_user)
-    limit(f"face:{current_user.org_id}", *FACE_CHECKS)
-
-    result = verify_face(
-        db=db,
-        mobile_number=current_user.mobile_number,
-        captured_image_base64=request.face_image_base64,
-    )
-
-    status_code = result["status_code"]
-    body = result["body"]
-
-    if status_code != 200:
-        raise HTTPException(
-            status_code=status_code,
-            detail=body,
-        )
-
-    return body
 
 
 # POST /api/v1/face/liveness/create

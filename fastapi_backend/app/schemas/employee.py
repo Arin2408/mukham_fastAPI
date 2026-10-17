@@ -58,6 +58,8 @@ class EmployeeResponse(BaseModel):
     photo: str | None = None
     organisation_id: int
     is_member_registered: bool
+    # For the ID card's QR code: /verify/<card_code>
+    card_code: str
 
     manager_id: int | None = None
     manager_name: str | None = None
@@ -77,6 +79,7 @@ class EmployeeCardResponse(BaseModel):
     department_name: str | None = None
     organisation_name: str | None = None
     photo: str | None = None
+    card_code: str
 
 
 

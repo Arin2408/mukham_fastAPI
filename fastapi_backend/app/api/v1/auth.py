@@ -1,16 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends
 
-from app.db.session import get_db
-from app.schemas.auth import (
-    LoginRequest,
-    TokenResponse,
-)
-from app.services.auth_service import (
-    authenticate_user,
-    create_tokens,
-)
-from app.api.v1.accounts import limit_login
+# Sign-in lives in accounts.py: /org/login for admins, /member/login plus
+# the face check for employees.
 from app.dependencies.auth import get_current_user
 from app.models.user import User
 
@@ -30,26 +21,3 @@ def verify_token(
         # /organisations/{org_id}); an employee's own account id otherwise.
         "org_id": current_user.org_id,
     }
-
-@router.post(
-    "/auth/login",
-    response_model=TokenResponse,
-)
-def login(
-    data: LoginRequest,
-    db: Session = Depends(get_db),
-):
-    limit_login(data.mobile_number)
-    user = authenticate_user(
-        db=db,
-        mobile_number=data.mobile_number,
-        password=data.password,
-    )
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid mobile number or password",
-        )
-
-    return create_tokens(db, user, data.device_name)

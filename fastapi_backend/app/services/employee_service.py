@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.security import create_card_code
 from app.models.employee import Employee
 from app.models.user import User
 from app.models.department import Department
@@ -87,6 +88,7 @@ def serialize_employee(employee: Employee) -> dict:
     return {
         "user_id": employee.user_id,
         "employee_id": employee.user_id,
+        "card_code": create_card_code(employee.user_id),
         "first_name": employee.first_name,
         "last_name": employee.last_name,
         "mobile_number": user.mobile_number if user else "",

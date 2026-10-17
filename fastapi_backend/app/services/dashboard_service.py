@@ -5,8 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.models.attendance import Attendance
 from app.models.employee import Employee
+from app.models.face import EmployeeFaceData
 from app.services.attendance_service import LOCAL_TZ
-from app.services.department_service import get_department_leaderboard
+from app.services.department_service import get_department_leaderboard, get_departments
+from app.services.designation_service import get_designations
 from app.services.employee_service import get_employees
 from app.services.location_service import get_locations
 from app.services.shift_service import get_shifts
@@ -81,10 +83,30 @@ def get_dashboard_summary(db: Session, org_id: int) -> dict:
         for employee in employees
     )
 
+    shifts = len(get_shifts(db, org_id))
+    locations = len(get_locations(db, org_id))
+    mobiles = [e.user.mobile_number for e in employees if e.user]
+    faces = (
+        db.query(EmployeeFaceData)
+        .filter(EmployeeFaceData.mobile_number.in_(mobiles))
+        .count()
+        if mobiles
+        else 0
+    )
+
     return {
         "total_employees": len(employees),
-        "active_shifts": len(get_shifts(db, org_id)),
-        "office_locations": len(get_locations(db, org_id)),
+        "active_shifts": shifts,
+        "office_locations": locations,
+        # For the "Finish setting up" checklist on the dashboards.
+        "setup": {
+            "locations": locations,
+            "departments": len(get_departments(db, org_id)),
+            "designations": len(get_designations(db, org_id)),
+            "shifts": shifts,
+            "employees": len(employees),
+            "faces": faces,
+        },
         "attendance_score": attendance_score,
         "roles": [
             {"name": name, "count": count}

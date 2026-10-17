@@ -9,7 +9,6 @@ from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import create_face_token
 from app.models.face import EmployeeFaceData
 from app.services.storage import face_store, media_store
 
@@ -42,7 +41,8 @@ rekognition = boto3.client(
 )
 
 
-ATTENDANCE_FACE_MIN_SIMILARITY = 90
+# How alike two faces must be (0-100) to count as the same person.
+FACE_MIN_SIMILARITY = 90
 
 # What the app sees when AWS or the server fails; the details go to the log.
 FACE_CHECK_FAILED = "Face verification failed. Please try again."
@@ -89,152 +89,6 @@ def store_face_image(
 def delete_face_image(face_record: EmployeeFaceData) -> None:
     if face_record.face_image_key:
         face_store.delete(face_record.face_image_key)
-
-
-def verify_face(
-    db: Session,
-    mobile_number: str,
-    captured_image_base64: str,
-) -> dict:
-
-    normalized = normalize_mobile(mobile_number)
-
-    try:
-        face_record = (
-            db.query(EmployeeFaceData)
-            .filter(
-                EmployeeFaceData.mobile_number == normalized
-            )
-            .first()
-        )
-
-        if face_record is None:
-            logger.info(
-                "Face verify: no registered face for %s",
-                normalized,
-            )
-
-            return {
-                "status_code": 404,
-                "body": {
-                    "error": (
-                        "No reference face image found. "
-                        "Please register first."
-                    )
-                },
-            }
-
-        stored_image_bytes = load_face_image(face_record)
-
-        if stored_image_bytes is None:
-            logger.error(
-                "Face verify: stored image missing for %s",
-                normalized,
-            )
-
-            return {
-                "status_code": 404,
-                "body": {
-                    "error": (
-                        "No reference face image found. "
-                        "Please register first."
-                    )
-                },
-            }
-
-        try:
-            captured_image_bytes = base64.b64decode(
-                captured_image_base64
-            )
-
-        except Exception:
-            return {
-                "status_code": 400,
-                "body": {
-                    "error": "Invalid image data"
-                },
-            }
-
-        try:
-            aws_response = rekognition.compare_faces(
-                SourceImage={
-                    "Bytes": stored_image_bytes
-                },
-                TargetImage={
-                    "Bytes": captured_image_bytes
-                },
-                SimilarityThreshold=80,
-            )
-
-        except ClientError as e:
-            logger.warning(
-                "Face verify: AWS ClientError: %s",
-                e,
-            )
-
-            return {
-                "status_code": 400,
-                "body": {
-                    "error": FACE_CHECK_FAILED
-                },
-            }
-
-        matches = aws_response.get("FaceMatches", [])
-
-        if matches:
-            similarity = matches[0]["Similarity"]
-
-            logger.info(
-                "Face verify: match for %s "
-                "(similarity %.1f%%)",
-                normalized,
-                similarity,
-            )
-
-            body = {
-                "verified": True,
-                "confidence": similarity,
-                "similarity": similarity,
-                "message": "Face verified successfully",
-            }
-
-            # Attendance check-in requires this server-issued proof.
-            # Same threshold the member portal applies.
-            if similarity >= ATTENDANCE_FACE_MIN_SIMILARITY:
-                body["face_token"] = create_face_token(normalized)
-
-            return {
-                "status_code": 200,
-                "body": body,
-            }
-
-        logger.info(
-            "Face verify: no match for %s",
-            normalized,
-        )
-
-        return {
-            "status_code": 400,
-            "body": {
-                "verified": False,
-                "confidence": 0,
-                "message": (
-                    "Face verification failed. "
-                    "No match found. "
-                    "Please look directly at the camera."
-                ),
-            },
-        }
-
-    except Exception:
-        logger.exception("Face verify failed")
-
-        return {
-            "status_code": 500,
-            "body": {
-                "error": FACE_CHECK_FAILED
-            },
-        }
 
 
 def create_liveness_session() -> dict:
@@ -351,6 +205,29 @@ def get_liveness_result(
                     "confidence": confidence,
                     "message": (
                         "Face liveness verification failed."
+                    ),
+                },
+            }
+
+        # SUCCEEDED only means the check finished. Whether it saw a live
+        # person, not a photo or a screen, is the confidence score.
+        logger.info(
+            "Liveness result (%s): confidence %s, minimum %s",
+            mode,
+            confidence,
+            settings.liveness_min_confidence,
+        )
+
+        if confidence is None or confidence < settings.liveness_min_confidence:
+            return {
+                "status_code": 400,
+                "body": {
+                    "verified": False,
+                    "status": session_status,
+                    "confidence": confidence,
+                    "message": (
+                        "Face liveness check failed. Please try again "
+                        "with your real face in good light."
                     ),
                 },
             }
@@ -509,7 +386,7 @@ def get_liveness_result(
                 TargetImage={
                     "Bytes": reference_bytes
                 },
-                SimilarityThreshold=80,
+                SimilarityThreshold=FACE_MIN_SIMILARITY,
             )
 
         except ClientError as e:
@@ -644,10 +521,10 @@ def sync_employee_photo(
         if employee is None:
             return
 
-        # A new name for every photo: phones and browsers keep pictures by
-        # address, so reusing one would keep showing the old face. The
-        # random part also means nobody can guess it from a phone number.
-        relative_path = f"employee_photos/face_{normalized}_{secrets.token_hex(8)}.jpg"
+        # A new random name for every photo: phones and browsers keep
+        # pictures by address, so reusing one would keep showing the old
+        # face. No phone number in it, so the address reveals nothing.
+        relative_path = f"employee_photos/face_{secrets.token_hex(16)}.jpg"
         media_store.save(
             relative_path,
             resize_photo(image_bytes),

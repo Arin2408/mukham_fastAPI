@@ -18,10 +18,22 @@ class DayPresence(BaseModel):
     percent: float
 
 
+class SetupCounts(BaseModel):
+    """How far the organisation has got with setting up Mukham."""
+    locations: int
+    departments: int
+    designations: int
+    shifts: int
+    employees: int
+    # Employees whose face is registered (done at their first sign-in)
+    faces: int
+
+
 class DashboardSummaryResponse(BaseModel):
     total_employees: int
     active_shifts: int
     office_locations: int
+    setup: SetupCounts
     # Average department punctuality score, 0-100
     attendance_score: int
     # Employees per designation, most common first

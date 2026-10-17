@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # Cognito identity pool whose guest role may run face liveness checks
     # (the web app uses the same pool from the browser).
     aws_identity_pool_id: str | None = None
+    # Lowest AWS liveness score (0-100) accepted as a live person. A photo
+    # or screen held up to the camera finishes the check but scores low.
+    liveness_min_confidence: float = 90
 
     # CORS
     cors_allowed_origins: str = (

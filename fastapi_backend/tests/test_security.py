@@ -1,10 +1,17 @@
 """Regression tests for the fixes in SECURITY_AUDIT_REPORT.md."""
-from datetime import date
+from datetime import date, datetime, timezone
+
+import pytest
 
 from app.models.employee import Employee
+from app.models.face import EmployeeFaceData
 from app.models.location import Location
+from app.models.security_tracking import LivenessSession
 from app.models.task import Task
-from app.services import face_service
+from app.core.security import create_card_code, create_face_token
+from app.services import account_service, face_service
+
+from app.core.security import hash_password
 
 from .conftest import auth, make_employee, make_org
 
@@ -102,6 +109,86 @@ def test_employee_cannot_replace_their_face_with_a_photo(client, db, monkeypatch
     assert called == []
 
 
+def _liveness_check(monkeypatch, confidence, similarity=99.0):
+    """AWS answers: the check finished with this liveness score; faces match."""
+    compared = []
+    monkeypatch.setattr(
+        face_service.rekognition,
+        "get_face_liveness_session_results",
+        lambda **kw: {
+            "Status": "SUCCEEDED",
+            "Confidence": confidence,
+            "ReferenceImage": {"Bytes": b"live-frame"},
+        },
+    )
+
+    def compare(**kw):
+        compared.append(kw)
+        return {"FaceMatches": [{"Similarity": similarity}]}
+
+    monkeypatch.setattr(face_service.rekognition, "compare_faces", compare)
+    return compared
+
+
+def _saved_face(db, monkeypatch, mobile):
+    now = datetime.now(timezone.utc)
+    db.add(EmployeeFaceData(mobile_number=mobile, face_image_key="k", created_at=now, updated_at=now))
+    db.commit()
+    monkeypatch.setattr(face_service, "load_face_image", lambda record: b"saved-face")
+
+
+@pytest.mark.parametrize("mode", ["register", "verify"])
+def test_photo_held_to_the_camera_is_refused(db, monkeypatch, mode):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    if mode == "verify":
+        _saved_face(db, monkeypatch, employee.mobile_number)
+    compared = _liveness_check(monkeypatch, confidence=12.5)
+
+    result = face_service.get_liveness_result(db, "session-1", employee.mobile_number, mode)
+
+    assert result["status_code"] == 400
+    assert result["body"]["verified"] is False
+    assert compared == []
+    if mode == "register":
+        assert db.query(EmployeeFaceData).count() == 0
+
+
+def test_live_face_at_the_minimum_score_is_accepted(db, monkeypatch):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    _saved_face(db, monkeypatch, employee.mobile_number)
+    compared = _liveness_check(monkeypatch, confidence=90.0)
+
+    result = face_service.get_liveness_result(db, "session-1", employee.mobile_number, "verify")
+
+    assert result["status_code"] == 200
+    assert result["body"]["verified"] is True
+    assert compared[0]["SimilarityThreshold"] == 90
+
+
+def test_check_in_with_a_photo_gets_no_face_token(client, db, monkeypatch):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    _saved_face(db, monkeypatch, employee.mobile_number)
+    db.add(LivenessSession(
+        session_id="session-1",
+        mobile_number=employee.mobile_number,
+        created_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+    _liveness_check(monkeypatch, confidence=40.0)
+
+    response = client.post(
+        "/api/v1/face/liveness/result",
+        json={"session_id": "session-1", "mobile_number": employee.mobile_number, "mode": "verify"},
+        headers=auth(employee),
+    )
+
+    assert response.status_code == 400
+    assert "face_token" not in response.json()
+
+
 def test_liveness_mode_must_be_register_or_verify(client, db):
     org = make_org(db)
     employee = make_employee(db, org)
@@ -117,9 +204,9 @@ def test_face_image_size_is_capped(client, db):
     org = make_org(db)
     employee = make_employee(db, org)
     response = client.post(
-        "/api/v1/face/verify",
+        "/api/v1/face/register",
         json={"mobile_number": employee.mobile_number, "face_image_base64": "A" * 7_000_001},
-        headers=auth(employee),
+        headers=auth(org),
     )
     assert response.status_code == 422
 
@@ -344,7 +431,8 @@ def test_each_face_photo_gets_a_new_address(db, monkeypatch):
     face_service.sync_employee_photo(db, employee.mobile_number, b"two")
 
     assert len(set(saved)) == 2
-    assert all(employee.mobile_number in key and key != f"employee_photos/face_{employee.mobile_number}.jpg" for key in saved)
+    # Random names that don't reveal the phone number.
+    assert all(employee.mobile_number not in key for key in saved)
     # The first photo is removed once the second replaces it.
     assert deleted == [saved[0]]
 
@@ -428,3 +516,112 @@ def test_employee_saved_with_a_wrong_designation_can_still_be_renamed(client, db
     )
     assert still_wrong.status_code == 400
     assert fixed.status_code == 200
+
+
+# --- Bypasses closed before handover (2026-10-17) --------------------------
+
+def test_employee_cannot_use_the_admin_sign_in(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    # Even if their account password were known (it is random otherwise).
+    employee.password = hash_password("known-password")
+    db.commit()
+
+    response = client.post(
+        "/api/v1/org/login",
+        json={"mobile_number": employee.mobile_number, "password": "known-password"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_employee_password_reset_still_needs_the_face_check(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    old_account_password = employee.password
+    _, _, body = account_service.prepare_password_reset(db, employee.email)
+    token = body.split("token=")[1].split()[0]
+
+    reset = client.post("/api/v1/reset-password", json={"token": token, "password": "brand-new-pass"})
+    assert reset.status_code == 200
+
+    db.refresh(employee)
+    assert employee.password == old_account_password
+    admin_login = client.post(
+        "/api/v1/org/login",
+        json={"mobile_number": employee.mobile_number, "password": "brand-new-pass"},
+    )
+    assert admin_login.status_code == 401
+    # The new password is the employee password: sign-in then asks for the face.
+    member_login = client.post(
+        "/api/v1/member/login",
+        json={"mobile_number": employee.mobile_number, "password": "brand-new-pass"},
+    )
+    assert member_login.status_code == 200
+    assert "access" not in member_login.json()
+    # The link works once.
+    again = client.post("/api/v1/reset-password", json={"token": token, "password": "another-pass-1"})
+    assert again.status_code == 400
+
+
+def test_still_photo_face_check_is_gone(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    response = client.post(
+        "/api/v1/face/verify",
+        json={"mobile_number": employee.mobile_number, "face_image_base64": "aGVsbG8="},
+        headers=auth(employee),
+    )
+    assert response.status_code in (404, 405)
+
+
+def test_check_in_with_fake_gps_is_refused(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    response = client.post(
+        "/api/v1/attendance/mark",
+        json={
+            "action": "checkin",
+            "latitude": 12.9,
+            "longitude": 77.6,
+            "accuracy": 10,
+            "face_token": create_face_token(employee.mobile_number),
+            "is_mocked": True,
+        },
+        headers=auth(employee),
+    )
+    assert response.status_code == 400
+    assert "Fake location" in response.text
+
+
+def test_id_cards_cannot_be_listed_by_number(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    other_org = make_org(db, mobile="9000000002")
+    eid = employee.org_id
+
+    assert client.get(f"/api/v1/employees/{eid}/card").status_code == 401
+    assert client.get(f"/api/v1/employees/{eid}/card", headers=auth(other_org)).status_code == 404
+    assert client.get(f"/api/v1/employees/{eid}/card", headers=auth(org)).status_code == 200
+    mine = client.get(f"/api/v1/employees/{eid}/card", headers=auth(employee))
+    assert mine.status_code == 200
+
+    code = mine.json()["card_code"]
+    assert code == create_card_code(eid)
+    public = client.get(f"/api/v1/cards/{code}")
+    assert public.status_code == 200
+    assert "mobile_number" not in public.json()
+    assert client.get(f"/api/v1/cards/{eid}").status_code == 404
+    assert client.get(f"/api/v1/cards/{eid}-forged").status_code == 404
+    assert client.get(f"/api/v1/cards/{eid + 1}-{code.split('-')[1]}").status_code == 404
+
+
+def test_dashboard_reports_setup_progress(client, db):
+    org = make_org(db)
+    make_employee(db, org)
+    response = client.get("/api/v1/dashboard/summary", headers=auth(org))
+    assert response.status_code == 200
+    assert response.json()["setup"] == {
+        "locations": 0, "departments": 0, "designations": 0,
+        "shifts": 0, "employees": 1, "faces": 0,
+    }

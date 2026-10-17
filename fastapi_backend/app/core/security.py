@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import uuid
@@ -241,3 +242,34 @@ def face_token_mobile(token: str) -> str | None:
         return None
 
     return payload.get("mobile_number")
+
+
+# --------------------------------------------------
+# ID-card codes
+# --------------------------------------------------
+# The QR code on an ID card opens /verify/<code>. The code is the employee
+# id plus a signature only this server can make, so nobody can step
+# through ids to list every employee. It never expires (cards get printed);
+# changing SECRET_KEY makes every printed code invalid.
+
+def _card_signature(employee_id: int) -> str:
+    digest = hmac.new(
+        settings.secret_key.encode("utf-8"),
+        f"id-card:{employee_id}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest[:16]).decode("ascii").rstrip("=")
+
+
+def create_card_code(employee_id: int) -> str:
+    return f"{employee_id}-{_card_signature(employee_id)}"
+
+
+def card_code_employee_id(code: str) -> int | None:
+    """The employee id in a genuine card code, or None."""
+    employee_id, _, signature = code.partition("-")
+    if not employee_id.isdigit() or not signature:
+        return None
+    if not hmac.compare_digest(signature, _card_signature(int(employee_id))):
+        return None
+    return int(employee_id)

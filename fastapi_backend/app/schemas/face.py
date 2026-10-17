@@ -8,19 +8,6 @@ from pydantic import BaseModel, Field
 MAX_IMAGE_BASE64 = 7_000_000
 
 
-class FaceVerifyRequest(BaseModel):
-    mobile_number: str = Field(min_length=1, max_length=15)
-    face_image_base64: str = Field(min_length=1, max_length=MAX_IMAGE_BASE64)
-
-
-class FaceVerifyResponse(BaseModel):
-    verified: bool
-    confidence: float | None = None
-    similarity: float | None = None
-    message: str
-    face_token: str | None = None
-
-
 class LivenessCreateResponse(BaseModel):
     session_id: str
     region: str

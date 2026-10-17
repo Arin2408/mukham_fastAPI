@@ -117,6 +117,19 @@ def register_organisation(
 # ORGANISATION LOGIN
 # --------------------------------------------------
 
+def _sign_in_hash(db: Session, user: User) -> tuple[str | None, Employee | None]:
+    """
+    The password hash this person signs in with, and their employee row.
+    Admins use User.password; employees use Employee.member_password, and
+    their User.password is a random value no one knows, so the admin sign-in
+    can never be used to skip the employee face check.
+    """
+    if user.is_organization:
+        return user.password, None
+    employee = db.query(Employee).filter(Employee.user_id == user.org_id).first()
+    return (employee.member_password if employee else None), employee
+
+
 def login_organisation(
     db: Session,
     mobile_number: str,
@@ -128,10 +141,16 @@ def login_organisation(
 
     # One answer for an unknown number and a wrong password, so this can't
     # be used to find out which numbers have accounts.
-    if user is None or not user.is_active or not _safe_verify(password, user.password):
+    # Admins only: employees sign in with /member/login and the face check.
+    if (
+        user is None
+        or not user.is_active
+        or not user.is_organization
+        or not _safe_verify(password, user.password)
+    ):
         raise AccountError(401, "Invalid mobile number or password")
 
-    role = "organization" if user.is_organization else "employee"
+    role = "organization"
 
     try:
         refresh = start_session(db, user, device_name)
@@ -330,7 +349,11 @@ def prepare_password_reset(db: Session, email: str) -> tuple[str, str, str] | No
     if user is None or not user.is_active:
         return None
 
-    token = create_password_reset_token(user.org_id, user.password)
+    current_hash, _ = _sign_in_hash(db, user)
+    if current_hash is None:
+        return None
+
+    token = create_password_reset_token(user.org_id, current_hash)
     link = f"{settings.frontend_url.rstrip('/')}/reset-password?token={token}"
 
     body = (
@@ -357,10 +380,16 @@ def reset_password(db: Session, token: str, new_password: str) -> None:
 
     user = db.query(User).filter(User.org_id == int(payload["sub"])).first()
 
-    if user is None or not password_reset_token_matches(payload, user.password):
+    current_hash, employee = _sign_in_hash(db, user) if user else (None, None)
+    if current_hash is None or not password_reset_token_matches(payload, current_hash):
         raise AccountError(400, "This reset link is invalid or has expired.")
 
-    user.password = hash_password(new_password)
+    # An employee's new password is their employee password, so signing in
+    # still needs the face check.
+    if employee is not None:
+        employee.member_password = hash_password(new_password)
+    else:
+        user.password = hash_password(new_password)
 
     # A reset signs the account out everywhere: if it was taken over, the
     # other sessions end now (access tokens already issued expire within
@@ -397,14 +426,9 @@ def change_password(
     out and stops getting notifications; this device (its refresh token and
     push token, when sent) stays signed in.
     """
-    employee = None
-    if user.is_organization:
-        current_hash = user.password
-    else:
-        employee = db.query(Employee).filter(Employee.user_id == user.org_id).first()
-        if employee is None:
-            raise AccountError(404, "Employee profile not found")
-        current_hash = employee.member_password
+    current_hash, employee = _sign_in_hash(db, user)
+    if not user.is_organization and employee is None:
+        raise AccountError(404, "Employee profile not found")
 
     if not _safe_verify(current_password, current_hash):
         raise AccountError(400, "Current password is incorrect.")

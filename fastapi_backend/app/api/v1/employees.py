@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import client_ip, limit
+from app.core.security import card_code_employee_id, create_card_code
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
 from app.models.employee import Employee
@@ -213,35 +214,15 @@ def remove_employee(
 
 
 # --------------------------------------------------
-# PUBLIC ID-CARD VERIFICATION
-# GET /api/v1/employees/{employee_id}/card
+# ID CARD
 # --------------------------------------------------
-# Used by the QR code on the virtual ID card. No login, so it returns
-# only what is printed on the card - never mobile number or email.
+# GET /api/v1/employees/{employee_id}/card - the card's details for the
+# organisation's admin or the employee themselves (apps showing the card).
+# GET /api/v1/cards/{card_code} - public, for the QR code's /verify page.
+# Only what is printed on the card - never mobile number or email - and
+# only for a genuine card code, so ids can't be stepped through.
 
-@router.get(
-    "/employees/{employee_id}/card",
-    response_model=EmployeeCardResponse,
-)
-def employee_card(
-    employee_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    # Public: slow down anyone stepping through ids to list everyone.
-    limit(f"card:{client_ip(request)}", 60, 60)
-    employee = (
-        db.query(Employee)
-        .filter(Employee.user_id == employee_id)
-        .first()
-    )
-
-    if employee is None or employee.user is None or not employee.user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Employee not found",
-        )
-
+def _card(employee: Employee) -> dict:
     return {
         "employee_id": employee.user_id,
         "first_name": employee.first_name,
@@ -256,7 +237,66 @@ def employee_card(
             employee.organisation.name if employee.organisation else None
         ),
         "photo": media_url(employee.photo),
+        "card_code": create_card_code(employee.user_id),
     }
+
+
+def _active_employee(db: Session, employee_id: int) -> Employee:
+    employee = (
+        db.query(Employee)
+        .filter(Employee.user_id == employee_id)
+        .first()
+    )
+    if employee is None or employee.user is None or not employee.user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found",
+        )
+    return employee
+
+
+@router.get(
+    "/employees/{employee_id}/card",
+    response_model=EmployeeCardResponse,
+)
+def employee_card(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    employee = _active_employee(db, employee_id)
+
+    is_own_admin = (
+        current_user.is_organization
+        and employee.organisation_id == current_user.org_id
+    )
+    is_self = not current_user.is_organization and current_user.org_id == employee_id
+    if not (is_own_admin or is_self):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found",
+        )
+
+    return _card(employee)
+
+
+@router.get(
+    "/cards/{card_code}",
+    response_model=EmployeeCardResponse,
+)
+def public_card(
+    card_code: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    limit(f"card:{client_ip(request)}", 60, 60)
+    employee_id = card_code_employee_id(card_code[:64])
+    if employee_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found",
+        )
+    return _card(_active_employee(db, employee_id))
 
 
 def _require_org(current_user: User) -> None:
