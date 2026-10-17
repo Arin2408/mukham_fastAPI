@@ -1,7 +1,6 @@
 
 import logging
 import secrets
-import string
 
 from fastapi import HTTPException
 from passlib.context import CryptContext
@@ -17,13 +16,6 @@ from app.services.storage import face_store, media_store
 
 
 logger = logging.getLogger(__name__)
-
-
-# Lowercase letters and digits without look-alikes (0/o, 1/l/i), since it
-# is read out or typed in.
-MEMBER_PASSWORD_ALPHABET = "".join(
-    c for c in string.ascii_lowercase + string.digits if c not in "01ilo"
-)
 
 
 password_context = CryptContext(
@@ -344,11 +336,9 @@ def create_employee(
         manager_id=data.manager,
     )
 
-    # Random, so nobody can work it out from the employee's number and
-    # name. Shown to the admin once, to pass on.
-    plain_member_password = "".join(
-        secrets.choice(MEMBER_PASSWORD_ALPHABET) for _ in range(10)
-    )
+    # First 5 digits of the mobile number + first 5 letters of the first
+    # name, lowercase. Shown to the admin once, to pass on.
+    plain_member_password = f"{mobile[:5]}{data.first_name[:5]}".lower()
 
     try:
         user = User(

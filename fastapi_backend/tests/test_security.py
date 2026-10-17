@@ -5,37 +5,31 @@ from app.models.employee import Employee
 from app.models.location import Location
 from app.models.task import Task
 from app.services import face_service
-from app.services.employee_service import MEMBER_PASSWORD_ALPHABET
 
 from .conftest import auth, make_employee, make_org
 
 
 # --- Sign-in -------------------------------------------------------------
 
-def test_new_employee_passwords_are_random(client, db):
+def test_new_employee_password_is_mobile_and_name(client, db):
     org = make_org(db)
-    passwords = []
-    for mobile in ("7000000001", "7000000002"):
-        response = client.post(
-            "/api/v1/employees",
-            json={
-                "mobile_number": mobile,
-                "email": f"{mobile}@example.com",
-                "first_name": "Asha",
-                "last_name": "Rao",
-                "manager": None,
-            },
-            headers=auth(org),
-        )
-        assert response.status_code == 201
-        passwords.append(response.json()["member_password"])
+    response = client.post(
+        "/api/v1/employees",
+        json={
+            "mobile_number": "7000000001",
+            "email": "7000000001@example.com",
+            "first_name": "Ashwini",
+            "last_name": "Rao",
+            "manager": None,
+        },
+        headers=auth(org),
+    )
+    assert response.status_code == 201
+    password = response.json()["member_password"]
+    assert password == "70000ashwi"
 
-    # Not the old guessable "first 5 digits + first 5 letters of the name".
-    assert "70000asha" not in passwords
-    assert passwords[0] != passwords[1]
-    for password in passwords:
-        assert len(password) == 10
-        assert set(password) <= set(MEMBER_PASSWORD_ALPHABET)
+    login = client.post("/api/v1/member/login", json={"mobile_number": "7000000001", "password": password})
+    assert login.status_code == 200
 
 
 def test_admin_sign_in_does_not_reveal_which_numbers_exist(client, db):
