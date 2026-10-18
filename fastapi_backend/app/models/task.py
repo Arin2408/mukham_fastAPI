@@ -55,3 +55,5 @@ class Task(Base):
     )
 
     employee = relationship("Employee", foreign_keys=[employee_id])
+    # The admin, or the employee's manager, who assigned it.
+    created_by = relationship("User", foreign_keys=[created_by_id])

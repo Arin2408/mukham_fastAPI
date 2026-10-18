@@ -625,3 +625,84 @@ def test_dashboard_reports_setup_progress(client, db):
         "locations": 0, "departments": 0, "designations": 0,
         "shifts": 0, "employees": 1, "faces": 0,
     }
+
+
+# --- Managers assign tasks to their direct reports --------------------------
+
+def _reports_to(db, employee_user, manager_user):
+    row = db.query(Employee).filter(Employee.user_id == employee_user.org_id).one()
+    row.manager_id = manager_user.org_id
+    db.commit()
+
+
+def _task(employee_user, title="Check stock"):
+    return {"employee_id": employee_user.org_id, "title": title, "assigned_date": "2026-10-18"}
+
+
+def test_manager_assigns_and_manages_tasks_for_direct_reports_only(client, db):
+    org = make_org(db)
+    manager = make_employee(db, org, mobile="8000000001")
+    report = make_employee(db, org, mobile="8000000002")
+    grand_report = make_employee(db, org, mobile="8000000003")
+    outsider = make_employee(db, org, mobile="8000000004")
+    _reports_to(db, report, manager)
+    _reports_to(db, grand_report, report)
+
+    team = client.get("/api/v1/team", headers=auth(manager)).json()
+    assert [m["employee_id"] for m in team] == [report.org_id]
+    profile = client.get("/api/v1/employee-details", headers=auth(manager)).json()
+    assert profile["team_size"] == 1
+
+    created = client.post("/api/v1/tasks", json=_task(report), headers=auth(manager))
+    assert created.status_code == 201
+    task = created.json()
+    assert task["assigned_by_manager"] is True
+    assert task["created_by_id"] == manager.org_id
+
+    # Not someone further down, and not someone outside the team.
+    assert client.post("/api/v1/tasks", json=_task(grand_report), headers=auth(manager)).status_code == 400
+    assert client.post("/api/v1/tasks", json=_task(outsider), headers=auth(manager)).status_code == 400
+
+    team_tasks = client.get("/api/v1/tasks?scope=team", headers=auth(manager)).json()
+    assert [t["task_id"] for t in team_tasks] == [task["task_id"]]
+    # The report sees it as their own task.
+    mine = client.get("/api/v1/tasks", headers=auth(report)).json()
+    assert [t["task_id"] for t in mine] == [task["task_id"]]
+
+    edited = client.put(f"/api/v1/tasks/{task['task_id']}", json={"title": "Count stock"}, headers=auth(manager))
+    assert edited.status_code == 200
+    # The manager can't move it to someone outside the team.
+    moved = client.put(f"/api/v1/tasks/{task['task_id']}", json={"employee_id": outsider.org_id}, headers=auth(manager))
+    assert moved.status_code == 400
+    # The assignee can't edit or delete it, only change its status.
+    assert client.put(f"/api/v1/tasks/{task['task_id']}", json={"title": "x"}, headers=auth(report)).status_code == 403
+    assert client.delete(f"/api/v1/tasks/{task['task_id']}", headers=auth(report)).status_code == 403
+    status = client.patch(f"/api/v1/tasks/{task['task_id']}/status", json={"status": "in_progress"}, headers=auth(report))
+    assert status.status_code == 200
+
+    assert client.delete(f"/api/v1/tasks/{task['task_id']}", headers=auth(manager)).status_code == 200
+
+
+def test_manager_cannot_change_the_admins_tasks(client, db):
+    org = make_org(db)
+    manager = make_employee(db, org, mobile="8000000001")
+    report = make_employee(db, org, mobile="8000000002")
+    _reports_to(db, report, manager)
+    admin_task = client.post("/api/v1/tasks", json=_task(report), headers=auth(org)).json()
+
+    # Visible to the manager, but only the admin can change it.
+    assert client.get(f"/api/v1/tasks/{admin_task['task_id']}", headers=auth(manager)).status_code == 200
+    assert client.put(f"/api/v1/tasks/{admin_task['task_id']}", json={"title": "x"}, headers=auth(manager)).status_code == 403
+    assert client.delete(f"/api/v1/tasks/{admin_task['task_id']}", headers=auth(manager)).status_code == 403
+    status = client.patch(f"/api/v1/tasks/{admin_task['task_id']}/status", json={"status": "completed"}, headers=auth(manager))
+    assert status.status_code == 403
+
+
+def test_employee_without_a_team_cannot_assign_tasks(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org, mobile="8000000001")
+    other = make_employee(db, org, mobile="8000000002")
+
+    assert client.get("/api/v1/team", headers=auth(employee)).json() == []
+    assert client.get("/api/v1/tasks?scope=team", headers=auth(employee)).json() == []
+    assert client.post("/api/v1/tasks", json=_task(other), headers=auth(employee)).status_code == 403

@@ -51,6 +51,10 @@ def serialize_task(task: Task, today: date | None = None) -> dict:
             and task.completed_date is not None
             and task.completed_date > task.due_date
         ),
+        "created_by_id": task.created_by_id,
+        # "Assigned by": the admin (organisation) or the employee's manager.
+        "assigned_by_name": task.created_by.name if task.created_by else None,
+        "assigned_by_manager": bool(task.created_by and not task.created_by.is_organization),
         "created_at": task.created_at,
         "updated_at": task.updated_at,
     }
@@ -70,9 +74,45 @@ def _org_employee(db: Session, org_id: int, employee_id: int) -> Employee:
     return employee
 
 
+def direct_reports(db: Session, manager_id: int) -> list[Employee]:
+    """The employees whose manager is this employee (one level down)."""
+    return (
+        db.query(Employee)
+        .options(joinedload(Employee.designation))
+        .filter(Employee.manager_id == manager_id)
+        .order_by(Employee.first_name, Employee.last_name)
+        .all()
+    )
+
+
+def _team_employee(db: Session, manager_id: int, employee_id: int) -> Employee:
+    employee = (
+        db.query(Employee)
+        .filter(
+            Employee.user_id == employee_id,
+            Employee.manager_id == manager_id,
+        )
+        .first()
+    )
+    if employee is None:
+        raise HTTPException(
+            status_code=400,
+            detail="You can only assign tasks to people who report to you.",
+        )
+    return employee
+
+
+def _assignable_employee(db: Session, org_id: int, employee_id: int, manager_id: int | None) -> Employee:
+    """Admin: anyone in the organisation. Manager: their direct reports only."""
+    if manager_id is not None:
+        return _team_employee(db, manager_id, employee_id)
+    return _org_employee(db, org_id, employee_id)
+
+
 def _query(db: Session):
     return db.query(Task).options(
-        joinedload(Task.employee).joinedload(Employee.department)
+        joinedload(Task.employee).joinedload(Employee.department),
+        joinedload(Task.created_by),
     )
 
 
@@ -80,6 +120,7 @@ def list_tasks(
     db: Session,
     org_id: int | None = None,
     employee_id: int | None = None,
+    employee_ids: list[int] | None = None,
     from_date: date | None = None,
     to_date: date | None = None,
     status: str | None = None,
@@ -104,6 +145,8 @@ def list_tasks(
         query = query.filter(Task.org_id == org_id)
     if employee_id is not None:
         query = query.filter(Task.employee_id == employee_id)
+    if employee_ids is not None:
+        query = query.filter(Task.employee_id.in_(employee_ids))
     if status is not None:
         query = query.filter(Task.status == status)
     if to_date is not None:
@@ -120,8 +163,14 @@ def get_task(db: Session, task_id: int) -> Task | None:
     return _query(db).filter(Task.task_id == task_id).first()
 
 
-def create_task(db: Session, org_id: int, created_by_id: int, data) -> Task:
-    _org_employee(db, org_id, data.employee_id)
+def create_task(
+    db: Session,
+    org_id: int,
+    created_by_id: int,
+    data,
+    manager_id: int | None = None,
+) -> Task:
+    _assignable_employee(db, org_id, data.employee_id, manager_id)
 
     task = Task(
         org_id=org_id,
@@ -146,11 +195,17 @@ def create_task(db: Session, org_id: int, created_by_id: int, data) -> Task:
     return get_task(db, task.task_id)
 
 
-def update_task(db: Session, task: Task, org_id: int, data) -> Task:
+def update_task(
+    db: Session,
+    task: Task,
+    org_id: int,
+    data,
+    manager_id: int | None = None,
+) -> Task:
     values = data.model_dump(exclude_unset=True)
 
     if values.get("employee_id") is not None:
-        _org_employee(db, org_id, values["employee_id"])
+        _assignable_employee(db, org_id, values["employee_id"], manager_id)
         task.employee_id = values["employee_id"]
 
     if values.get("title") is not None:

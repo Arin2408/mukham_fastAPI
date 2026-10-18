@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.dependencies.auth import get_current_user
+from app.models.employee import Employee
 from app.models.user import User
 from app.schemas.profile import (
     EmployeeOfficeLocation,
@@ -157,6 +158,7 @@ def employee_details(
             else None
         ),
         email=current_user.email,
+        team_size=db.query(Employee).filter(Employee.manager_id == employee.user_id).count(),
         shift_start_time=(
             employee.shift.shift_start_time if employee.shift else None
         ),

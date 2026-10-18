@@ -54,3 +54,5 @@ class EmployeeProfileResponse(BaseModel):
     shift_start_time: time | None = None
     shift_end_time: time | None = None
     office_location: EmployeeOfficeLocation | None = None
+    # People who report to this employee; > 0 means they can assign tasks.
+    team_size: int = 0

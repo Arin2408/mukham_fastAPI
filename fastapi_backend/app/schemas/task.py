@@ -74,5 +74,17 @@ class TaskResponse(BaseModel):
     is_overdue: bool = False
     # Completed after its due date
     completed_late: bool = False
+    created_by_id: int | None = None
+    assigned_by_name: str | None = None
+    # True when the employee's manager assigned it, not the admin.
+    assigned_by_manager: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class TeamMemberResponse(BaseModel):
+    """Someone who reports to the signed-in manager."""
+    employee_id: int
+    first_name: str
+    last_name: str
+    designation_name: str | None = None

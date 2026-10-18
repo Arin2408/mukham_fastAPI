@@ -88,15 +88,15 @@ dist/
 .terraform/
 *.tfstate
 *.tfstate.*
-.coverage
-.coverage.*
-htmlcov/
 
 # =========================
-# Tool caches / build output
+# Local databases (other names) / test caches
 # =========================
-.mypy_cache/
-.ruff_cache/
-*.egg-info/
-build/
-dist/
+*.db
+*.sqlite
+.hypothesis/
+
+# =========================
+# Claude Code local settings
+# =========================
+.claude/
