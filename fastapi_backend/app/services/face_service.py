@@ -61,7 +61,7 @@ def normalize_mobile(mobile_number: str) -> str:
 
 # ---------------------------------------------------------
 # FACE IMAGE STORAGE
-# Enrolled images live in face_store, not in the database.
+# Enrolled images live in face_store, not in the base64 column.
 # ---------------------------------------------------------
 
 def load_face_image(face_record: EmployeeFaceData) -> bytes | None:

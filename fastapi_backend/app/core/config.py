@@ -93,8 +93,14 @@ class Settings(BaseSettings):
     # Enrolled face images. Never mounted or served over HTTP.
     private_media_root: Path = BASE_DIR / "private_media"
 
+    # Where photos and face images are kept when no S3 bucket is set:
+    # "database" (the stored_files table; survives restarts on hosts whose
+    # disk is wiped, such as Render's free plan) or "local" (the two
+    # folders above).
+    media_storage: str = "database"
+
     # When set, photos and face images go to this private S3 bucket
-    # (under media/ and faces/) instead of the two folders above.
+    # (under media/ and faces/) instead.
     media_s3_bucket: str | None = None
     media_url_expire_seconds: int = 3600
 

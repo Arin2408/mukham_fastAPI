@@ -7,6 +7,7 @@ from app.models.employee import Employee
 from app.models.attendance import Attendance
 from app.models.face import EmployeeFaceData
 from app.models.task import Task
+from app.models.stored_file import StoredFile
 from app.models.notification import (
     NotificationPreference,
     NotificationSent,
@@ -30,6 +31,7 @@ __all__ = [
     "Attendance",
     "EmployeeFaceData",
     "Task",
+    "StoredFile",
     "PushDevice",
     "NotificationPreference",
     "NotificationSent",

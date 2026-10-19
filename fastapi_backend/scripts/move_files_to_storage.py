@@ -3,9 +3,10 @@ Move stored files into the configured storage (app/services/storage.py).
 
 1. Face images still kept as base64 in face_auth_employeefacedata are
    written to face_store, and the base64 column is emptied.
-2. When MEDIA_S3_BUCKET is set, files already on local disk are uploaded:
-   MEDIA_ROOT -> s3://<bucket>/media/, PRIVATE_MEDIA_ROOT -> .../faces/.
-   Local files are left in place; delete them once the upload is checked.
+2. When files are kept in S3 or in the database (not on local disk), files
+   already on local disk are copied there: MEDIA_ROOT -> media/,
+   PRIVATE_MEDIA_ROOT -> faces/. Local files are left in place; delete them
+   once the copy is checked.
 
 Safe to run more than once. Run from fastapi_backend/:
 
@@ -21,7 +22,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.face import EmployeeFaceData
 from app.services.face_service import store_face_image
-from app.services.storage import face_store, media_store, uses_s3
+from app.services.storage import face_store, media_store, uses_database, uses_s3
 
 
 def move_database_faces(dry_run: bool) -> int:
@@ -48,13 +49,13 @@ def move_database_faces(dry_run: bool) -> int:
     return moved
 
 
-def upload_folder(root: Path, store, label: str, dry_run: bool) -> int:
+def upload_folder(root: Path, store, label: str, target: str, dry_run: bool) -> int:
     if not root.is_dir():
         return 0
     uploaded = 0
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         key = path.relative_to(root).as_posix()
-        print(f"{label} {key}: local disk -> S3")
+        print(f"{label} {key}: local disk -> {target}")
         if not dry_run:
             content_type = mimetypes.guess_type(path.name)[0]
             store.save(key, path.read_bytes(), content_type or "application/octet-stream")
@@ -69,14 +70,15 @@ def main() -> None:
 
     faces = move_database_faces(args.dry_run)
     photos = private = 0
-    if uses_s3():
-        photos = upload_folder(settings.media_root, media_store, "photo", args.dry_run)
-        private = upload_folder(settings.private_media_root, face_store, "face", args.dry_run)
+    target = "S3" if uses_s3() else "the database" if uses_database() else None
+    if target:
+        photos = upload_folder(settings.media_root, media_store, "photo", target, args.dry_run)
+        private = upload_folder(settings.private_media_root, face_store, "face", target, args.dry_run)
 
     verb = "Would move" if args.dry_run else "Moved"
     print(
         f"{verb} {faces} face(s) out of the database"
-        + (f", {photos} photo(s) and {private} face file(s) to S3" if uses_s3() else "")
+        + (f", {photos} photo(s) and {private} face file(s) to {target}" if target else "")
         + "."
     )
 

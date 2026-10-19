@@ -15,6 +15,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models.employee import Employee
 from app.models.user import User
+from app.services import storage
 
 
 @pytest.fixture
@@ -35,11 +36,18 @@ def db():
             session.close()
 
     app.dependency_overrides[get_db] = override
+    # Photos and face images kept in the database go to this one too.
+    for store in (storage.media_store, storage.face_store):
+        if isinstance(store, storage.DatabaseStorage):
+            store.sessions = Session
     rate_limit.reset()
     session = Session()
     yield session
     session.close()
     app.dependency_overrides.clear()
+    for store in (storage.media_store, storage.face_store):
+        if isinstance(store, storage.DatabaseStorage):
+            store.sessions = storage.SessionLocal
     engine.dispose()
 
 

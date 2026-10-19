@@ -9,7 +9,7 @@ from app.models.location import Location
 from app.models.security_tracking import LivenessSession
 from app.models.task import Task
 from app.core.security import create_card_code, create_face_token
-from app.services import account_service, face_service
+from app.services import account_service, face_service, storage
 
 from app.core.security import hash_password
 
@@ -435,6 +435,26 @@ def test_each_face_photo_gets_a_new_address(db, monkeypatch):
     assert all(employee.mobile_number not in key for key in saved)
     # The first photo is removed once the second replaces it.
     assert deleted == [saved[0]]
+
+
+def test_photos_and_faces_are_kept_in_the_database(client, db, monkeypatch):
+    if not storage.uses_database():
+        pytest.skip("MEDIA_STORAGE is not database here")
+    org = make_org(db)
+    employee = make_employee(db, org)
+    monkeypatch.setattr(face_service, "resize_photo", lambda b: b)
+
+    face_service.sync_employee_photo(db, employee.mobile_number, b"photo-bytes")
+    photo = db.get(Employee, employee.org_id).photo
+    response = client.get(f"/media/{photo}")
+    assert response.status_code == 200
+    assert response.content == b"photo-bytes"
+    assert response.headers["content-type"] == "image/jpeg"
+
+    # Enrolled face images are kept too, but never served.
+    storage.face_store.save(f"{employee.mobile_number}.jpg", b"face-bytes", "image/jpeg")
+    assert storage.face_store.read(f"{employee.mobile_number}.jpg") == b"face-bytes"
+    assert client.get(f"/media/faces/{employee.mobile_number}.jpg").status_code == 404
 
 
 # --- Department, designation and shift must match ------------------------------
