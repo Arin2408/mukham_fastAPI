@@ -1,4 +1,7 @@
 
+from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -63,6 +66,13 @@ class EmployeeResponse(BaseModel):
 
     manager_id: int | None = None
     manager_name: str | None = None
+
+    # The phone this employee checks in from: "none" until their first
+    # check-in from the app, "registered", or "pending" when a different
+    # phone is waiting for the admin's approval. None while the phone lock
+    # is off (PHONE_LOCK_ENABLED).
+    phone_status: Literal["none", "registered", "pending"] | None = None
+    phone_registered_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

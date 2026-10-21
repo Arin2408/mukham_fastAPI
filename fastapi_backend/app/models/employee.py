@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, ForeignKey, Integer, String
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -68,6 +70,24 @@ class Employee(Base):
         Boolean,
         nullable=False,
         default=False,
+    )
+
+    # The one phone this employee may check in from (the app's device ID).
+    # Set by the first check-in from the app; a different phone waits in
+    # pending_device_id until the admin approves it.
+    device_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    device_registered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    pending_device_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
     )
 
     user = relationship(

@@ -145,3 +145,10 @@ class Attendance(Base):
         "Location",
         foreign_keys=[check_in_location_id],
     )
+
+    presence_events = relationship(
+        "PresenceEvent",
+        order_by="PresenceEvent.occurred_at",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )

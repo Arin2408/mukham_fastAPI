@@ -8,6 +8,7 @@ from app.models.face import EmployeeFaceData
 from app.models.location import Location
 from app.models.security_tracking import LivenessSession
 from app.models.task import Task
+from app.core.config import settings
 from app.core.security import create_card_code, create_face_token
 from app.services import account_service, face_service, storage
 
@@ -726,3 +727,170 @@ def test_employee_without_a_team_cannot_assign_tasks(client, db):
     assert client.get("/api/v1/team", headers=auth(employee)).json() == []
     assert client.get("/api/v1/tasks?scope=team", headers=auth(employee)).json() == []
     assert client.post("/api/v1/tasks", json=_task(other), headers=auth(employee)).status_code == 403
+
+
+# --- Leaving the office during a shift ----------------------------------------
+
+def _checked_in(db, org, employee, at):
+    from app.models.attendance import Attendance
+
+    office = Location(location_name="Office", latitude=28.5, longitude=77.3, radius_meters=150, org_id=org.org_id)
+    db.add(office)
+    db.flush()
+    attendance = Attendance(
+        employee_id=employee.org_id,
+        check_in=at,
+        status="On Time",
+        location_status="inside",
+        source="self",
+        face_status="verified",
+        check_in_location_id=office.location_id,
+    )
+    db.add(attendance)
+    db.commit()
+    return attendance
+
+
+def test_time_out_of_the_office_is_recorded_for_the_admin(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+
+    # Not checked in: nothing to watch, events are ignored.
+    assert client.get("/api/v1/attendance/presence", headers=auth(employee)).json() is None
+    ignored = client.post(
+        "/api/v1/attendance/presence",
+        json={"event": "exit", "occurred_at": "2026-10-20T05:00:00Z"},
+        headers=auth(employee),
+    )
+    assert ignored.json() == {"recorded": False}
+
+    _checked_in(db, org, employee, datetime(2026, 10, 20, 3, 30, tzinfo=timezone.utc))
+    region = client.get("/api/v1/attendance/presence", headers=auth(employee)).json()
+    assert region["latitude"] == 28.5 and region["radius_meters"] == 150
+
+    def send(event, at):
+        return client.post(
+            "/api/v1/attendance/presence",
+            json={"event": event, "occurred_at": at},
+            headers=auth(employee),
+        ).json()["recorded"]
+
+    assert send("on", "2026-10-20T03:30:05Z")
+    assert not send("enter", "2026-10-20T04:00:00Z")  # was never out
+    assert send("exit", "2026-10-20T08:40:00Z")
+    assert not send("exit", "2026-10-20T08:41:00Z")  # Android repeats itself
+    assert send("enter", "2026-10-20T09:10:00Z")
+
+    record = client.get(
+        "/api/v1/attendance/history", params={"employee_id": employee.org_id}, headers=auth(org)
+    ).json()[0]
+    assert record["presence_tracking"] == "on"
+    assert record["time_outside_minutes"] == 30
+    assert [e["event"] for e in record["presence_events"]] == ["exit", "enter"]
+
+    # Only the employee's own phone reports; an admin can't add events.
+    assert client.post(
+        "/api/v1/attendance/presence",
+        json={"event": "exit", "occurred_at": "2026-10-20T10:00:00Z"},
+        headers=auth(org),
+    ).status_code == 403
+
+
+def test_refusing_background_location_shows_tracking_off(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    _checked_in(db, org, employee, datetime(2026, 10, 20, 3, 30, tzinfo=timezone.utc))
+
+    client.post(
+        "/api/v1/attendance/presence",
+        json={"event": "off", "occurred_at": "2026-10-20T03:31:00Z"},
+        headers=auth(employee),
+    )
+    record = client.get("/api/v1/attendance/history", headers=auth(employee)).json()[0]
+    assert record["presence_tracking"] == "off"
+    assert record["time_outside_minutes"] == 0
+
+
+# --- One phone per employee; face check at check-out ------------------------
+
+def _mark(client, employee, action, device_id=None, face=True):
+    body = {"action": action, "latitude": 28.5, "longitude": 77.3, "accuracy": 10}
+    if face:
+        body["face_token"] = create_face_token(employee.mobile_number)
+    if device_id:
+        body["device_id"] = device_id
+    return client.post("/api/v1/attendance/mark", json=body, headers=auth(employee))
+
+
+def test_any_phone_can_check_in_while_the_phone_lock_is_off(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    db.add(Location(location_name="Office", latitude=28.5, longitude=77.3, radius_meters=150, org_id=org.org_id))
+    db.commit()
+
+    assert _mark(client, employee, "checkin", "phone-a").status_code == 200
+    assert _mark(client, employee, "checkout", "phone-a").status_code == 200
+    assert _mark(client, employee, "checkin", "phone-b").status_code == 200
+    detail = client.get(f"/api/v1/employees/{employee.org_id}", headers=auth(org)).json()
+    assert detail["phone_status"] is None
+
+
+def test_only_the_registered_phone_can_check_in(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "phone_lock_enabled", True)
+    org = make_org(db)
+    employee = make_employee(db, org)
+    db.add(Location(location_name="Office", latitude=28.5, longitude=77.3, radius_meters=150, org_id=org.org_id))
+    db.commit()
+    detail = f"/api/v1/employees/{employee.org_id}"
+    assert client.get(detail, headers=auth(org)).json()["phone_status"] == "none"
+
+    # The first check-in from the app registers that phone.
+    assert _mark(client, employee, "checkin", "phone-a").status_code == 200
+    assert _mark(client, employee, "checkout", "phone-a").status_code == 200
+    assert client.get(detail, headers=auth(org)).json()["phone_status"] == "registered"
+
+    # Another phone is refused and waits for the admin.
+    refused = _mark(client, employee, "checkin", "phone-b")
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "device_not_approved"
+    assert client.get(detail, headers=auth(org)).json()["phone_status"] == "pending"
+
+    # Only the employee's own admin can approve it.
+    other_org = make_org(db, mobile="9000000002")
+    assert client.post(f"{detail}/phone/approve", headers=auth(other_org)).status_code == 404
+    assert client.post(f"{detail}/phone/approve", headers=auth(employee)).status_code == 403
+    approved = client.post(f"{detail}/phone/approve", headers=auth(org))
+    assert approved.json()["phone_status"] == "registered"
+
+    # Now the new phone works and the old one doesn't.
+    assert _mark(client, employee, "checkin", "phone-b").status_code == 200
+    assert _mark(client, employee, "checkout", "phone-b").status_code == 200
+    assert _mark(client, employee, "checkin", "phone-a").status_code == 403
+
+    # Reset: the next phone to check in is registered.
+    assert client.delete(f"{detail}/phone", headers=auth(org)).json()["phone_status"] == "none"
+    assert _mark(client, employee, "checkin", "phone-c").status_code == 200
+
+
+def test_check_out_needs_a_face_match(client, db):
+    org = make_org(db)
+    employee = make_employee(db, org)
+    db.add(Location(location_name="Office", latitude=28.5, longitude=77.3, radius_meters=150, org_id=org.org_id))
+    db.commit()
+    assert _mark(client, employee, "checkin").status_code == 200
+
+    without_face = _mark(client, employee, "checkout", face=False)
+    assert without_face.status_code == 428
+    assert without_face.json()["code"] == "face_verification_required"
+
+    someone_else = make_employee(db, org, mobile="8000000003")
+    forged = client.post(
+        "/api/v1/attendance/mark",
+        json={"action": "checkout", "face_token": create_face_token(someone_else.mobile_number)},
+        headers=auth(employee),
+    )
+    assert forged.status_code == 428
+
+    checked_out = _mark(client, employee, "checkout")
+    assert checked_out.status_code == 200
+    assert checked_out.json()["action"] == "check_out"

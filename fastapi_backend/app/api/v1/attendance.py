@@ -18,8 +18,16 @@ from app.schemas.attendance_mark import (
     AttendanceMarkRequest,
     AttendanceMarkResponse,
 )
+from app.schemas.presence import (
+    PresenceEventRequest,
+    PresenceEventResponse,
+    PresenceRegionResponse,
+)
+from app.core.rate_limit import limit
+from app.services import presence_service
 from app.services.attendance_service import (
     MAX_ATTENDANCE_PAGE_SIZE,
+    DeviceNotApprovedError,
     GeofenceRejectedError,
     LocationNotFoundError,
     LocationValidationError,
@@ -137,10 +145,60 @@ def attendance_history(
                 check_out_distance=record.check_out_distance,
                 check_out_location_status=record.check_out_location_status,
                 check_in_location_id=record.check_in_location_id,
+                **presence_service.summarize(record),
             )
         )
 
     return response
+
+
+def _self_employee(db: Session, current_user: User) -> Employee:
+    if current_user.is_organization:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only available for employees.",
+        )
+    employee = (
+        db.query(Employee)
+        .filter(Employee.user_id == current_user.org_id)
+        .first()
+    )
+    if employee is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee profile not found.",
+        )
+    return employee
+
+
+@router.get(
+    "/attendance/presence",
+    response_model=PresenceRegionResponse | None,
+)
+def attendance_presence_region(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The office area the phone watches while checked in; null when not checked in."""
+    return presence_service.presence_region(db, _self_employee(db, current_user))
+
+
+@router.post(
+    "/attendance/presence",
+    response_model=PresenceEventResponse,
+)
+def attendance_presence_event(
+    request: PresenceEventRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The phone left / came back into the office area, or tracking turned on / off."""
+    employee = _self_employee(db, current_user)
+    limit(f"presence:{employee.user_id}", 120, 60 * 60)
+    recorded = presence_service.record_presence(
+        db, employee, request.event, request.occurred_at
+    )
+    return PresenceEventResponse(recorded=recorded)
 
 
 @router.post(
@@ -208,6 +266,14 @@ def attendance_mark(
                 "allowed_radius_meters": exc.location.radius_meters,
                 "office_location": exc.location.location_name,
             },
+        )
+
+    except DeviceNotApprovedError as exc:
+        db.rollback()
+        raise ApiError(
+            status.HTTP_403_FORBIDDEN,
+            "device_not_approved",
+            str(exc),
         )
 
     except NoOpenAttendanceError as exc:

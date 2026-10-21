@@ -29,6 +29,8 @@ from app.services.employee_service import (
     media_url,
     get_hierarchy,
     set_manager,
+    approve_phone,
+    reset_phone,
 )
 
 
@@ -369,3 +371,52 @@ def change_manager(
     )
 
     return serialize_employee(employee)
+
+
+# --------------------------------------------------
+# THE PHONE AN EMPLOYEE CHECKS IN FROM
+# POST   /api/v1/employees/{employee_id}/phone/approve
+# DELETE /api/v1/employees/{employee_id}/phone
+# --------------------------------------------------
+# Approve: the phone waiting for approval (a new phone) replaces the old
+# one. Reset: forget the phone; the next check-in from the app registers it.
+
+def _org_employee(db: Session, employee_id: int, current_user: User) -> Employee:
+    _require_org(current_user)
+    employee = get_employee(
+        db=db,
+        employee_id=employee_id,
+        org_id=current_user.org_id,
+    )
+    if employee is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found",
+        )
+    return employee
+
+
+@router.post(
+    "/employees/{employee_id}/phone/approve",
+    response_model=EmployeeResponse,
+)
+def approve_employee_phone(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    employee = _org_employee(db, employee_id, current_user)
+    return serialize_employee(approve_phone(db, employee))
+
+
+@router.delete(
+    "/employees/{employee_id}/phone",
+    response_model=EmployeeResponse,
+)
+def reset_employee_phone(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    employee = _org_employee(db, employee_id, current_user)
+    return serialize_employee(reset_phone(db, employee))

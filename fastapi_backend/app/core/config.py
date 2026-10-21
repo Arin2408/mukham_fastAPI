@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Lowest AWS liveness score (0-100) accepted as a live person. A photo
     # or screen held up to the camera finishes the check but scores low.
     liveness_min_confidence: float = 90
+    # One phone per employee: check-in only from their registered phone,
+    # a new phone needs the admin's approval. Off for now (on hold).
+    phone_lock_enabled: bool = False
 
     # CORS
     cors_allowed_origins: str = (

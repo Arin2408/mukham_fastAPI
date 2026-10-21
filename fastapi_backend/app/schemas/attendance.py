@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.presence import PresenceEventOut
+
 
 class AttendanceHistoryResponse(BaseModel):
     id: int
@@ -31,6 +33,11 @@ class AttendanceHistoryResponse(BaseModel):
     check_out_location_status: str | None = None
 
     check_in_location_id: int | None = None
+
+    # Background geofence while checked in (app/services/presence_service.py).
+    presence_tracking: str | None = None
+    time_outside_minutes: int | None = None
+    presence_events: list[PresenceEventOut] = []
 
     model_config = {
         "from_attributes": True

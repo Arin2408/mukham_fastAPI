@@ -1,11 +1,13 @@
 
 import logging
+from datetime import datetime, timezone
 import secrets
 
 from fastapi import HTTPException
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import settings
 from app.core.security import create_card_code
 from app.models.employee import Employee
 from app.models.user import User
@@ -125,7 +127,39 @@ def serialize_employee(employee: Employee) -> dict:
             f"{employee.manager.first_name} {employee.manager.last_name}".strip()
             if employee.manager else None
         ),
+        # Left out while the phone lock is off, so the admin screens hide it.
+        "phone_status": (
+            phone_status(employee) if settings.phone_lock_enabled else None
+        ),
+        "phone_registered_at": employee.device_registered_at,
     }
+
+
+def phone_status(employee: Employee) -> str:
+    if employee.pending_device_id:
+        return "pending"
+    return "registered" if employee.device_id else "none"
+
+
+def approve_phone(db: Session, employee: Employee) -> Employee:
+    """The phone waiting for approval becomes the one to check in from."""
+    if employee.pending_device_id:
+        employee.device_id = employee.pending_device_id
+        employee.device_registered_at = datetime.now(timezone.utc)
+        employee.pending_device_id = None
+        db.commit()
+        db.refresh(employee)
+    return employee
+
+
+def reset_phone(db: Session, employee: Employee) -> Employee:
+    """Forget the phone; the next check-in from the app registers a new one."""
+    employee.device_id = None
+    employee.device_registered_at = None
+    employee.pending_device_id = None
+    db.commit()
+    db.refresh(employee)
+    return employee
 
 
 # --------------------------------------------------

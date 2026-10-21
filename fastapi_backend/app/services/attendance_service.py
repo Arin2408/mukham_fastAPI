@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import settings
 
@@ -46,6 +46,10 @@ class NoOpenAttendanceError(AttendanceError):
     pass
 
 
+class DeviceNotApprovedError(AttendanceError):
+    pass
+
+
 class GeofenceRejectedError(AttendanceError):
     def __init__(self, location: Location, distance_meters: float):
         super().__init__("You are outside the permitted attendance location.")
@@ -73,7 +77,10 @@ def get_attendance_history(
     """
     query = (
         db.query(Attendance)
-        .options(joinedload(Attendance.employee))
+        .options(
+            joinedload(Attendance.employee),
+            selectinload(Attendance.presence_events),
+        )
         .join(
             Employee,
             Attendance.employee_id == Employee.user_id,
@@ -398,6 +405,26 @@ def _record_check_out_location(
         attendance.check_out_location_status = "outside"
 
 
+def _check_phone(db: Session, employee: Employee, device_id: str | None) -> None:
+    """
+    Only the employee's registered phone may check in. Another phone is
+    refused and kept as waiting for the admin, who can approve it.
+
+    Website check-ins send no device ID and are not checked (for now).
+    """
+    if not device_id or employee.device_id in (None, device_id):
+        return
+
+    if employee.pending_device_id != device_id:
+        employee.pending_device_id = device_id
+    # Saved even though the check-in fails, so the admin sees the request.
+    db.commit()
+    raise DeviceNotApprovedError(
+        "This phone is not registered for your attendance. Ask your admin "
+        "to approve this phone, then try again."
+    )
+
+
 def mark_attendance(
     db: Session,
     employee: Employee,
@@ -418,9 +445,10 @@ def mark_attendance(
     action="checkout" -> only checks out (404 when nothing is open)
     no action         -> legacy toggle
 
-    Check-in requires a server face match (face_token), a real GPS position
-    (no fake-GPS app) inside the office radius. Check-out is never blocked,
-    only flagged.
+    Check-in requires a server face match (face_token), the employee's own
+    phone, and a real GPS position (no fake-GPS app) inside the office
+    radius. Check-out requires a face match too; its location is only
+    flagged, never blocking.
 
     Returns (attendance, "check_in" | "check_out", office, distance).
     """
@@ -445,6 +473,9 @@ def mark_attendance(
         if action == "checkin":
             db.commit()  # release the row lock
             return open_attendance, "check_in", None, None
+
+        # The person leaving is the one who came in, not a friend.
+        verify_attendance_face(face_token=face_token, mobile_number=mobile_number)
 
         now = datetime.now(timezone.utc)
         check_in = open_attendance.check_in
@@ -481,6 +512,9 @@ def mark_attendance(
     # CHECK-IN
     # ---------------------------------------------------------
     verify_attendance_face(face_token=face_token, mobile_number=mobile_number)
+
+    if settings.phone_lock_enabled:
+        _check_phone(db, employee, device_id)
 
     # The phone reports a fake-GPS (mock location) app; refuse rather than
     # only flag it. Check-out stays flag-only so nobody is stuck checked in.
@@ -532,6 +566,12 @@ def mark_attendance(
         face_status="verified",
         hours_worked=None,
     )
+
+    if settings.phone_lock_enabled and device_id and employee.device_id is None:
+        # The first check-in from the app registers this phone.
+        employee.device_id = device_id
+        employee.device_registered_at = attendance.check_in
+        employee.pending_device_id = None
 
     try:
         db.add(attendance)
