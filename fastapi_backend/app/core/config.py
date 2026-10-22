@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # the API docs at /docs.
     debug: bool = False
 
+    # Error tracking at sentry.io: server errors are sent there with the
+    # code line that failed. Empty = off. SENTRY_ENVIRONMENT tells
+    # "production" apart from a laptop's errors.
+    sentry_dsn: str | None = None
+    sentry_environment: str = "production"
+
     # Limits on repeated sign-in, sign-up, password-reset and face-check
     # requests (app/core/rate_limit.py). Turn off only for load tests.
     rate_limit_enabled: bool = True

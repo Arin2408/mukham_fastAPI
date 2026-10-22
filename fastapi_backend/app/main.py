@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.errors import error_response, register_error_handlers
+from app.core.monitoring import init_sentry
 from app.services.storage import media_store, uses_database, uses_s3
 
 from app.api.v1.health import router as health_router
@@ -25,6 +26,9 @@ from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.geocode import router as geocode_router
 from app.api.v1.notifications import router as notifications_router
 
+
+# Before the app is built, so Sentry sees every request.
+init_sentry()
 
 app = FastAPI(
     title="Mukham API",
