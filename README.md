@@ -33,6 +33,8 @@ PostgreSQL. Alembic owns the whole database schema.
    | --- | --- | --- |
    | `SECRET_KEY` | long random string | Signs JWTs and password-reset tokens |
    | `DEBUG` | `False` | `True` also enables the API docs at `/docs` and the `/api/v1/debug/*` routes (from this computer only). Keep `False` on servers |
+   | `SENTRY_DSN` | | Optional. Sends unexpected server errors to sentry.io (see Error tracking). Empty = off |
+   | `SENTRY_ENVIRONMENT` | `production` | Labels errors; use `development` on a laptop |
    | `POSTGRES_DB` | `mukham_db` | |
    | `POSTGRES_USER` | `postgres` | |
    | `POSTGRES_PASSWORD` | | |
@@ -40,8 +42,12 @@ PostgreSQL. Alembic owns the whole database schema.
    | `POSTGRES_PORT` | `5432` | |
    | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | | Rekognition (face match, liveness) and S3 |
    | `AWS_DEFAULT_REGION` | `ap-south-1` | |
-   | `AWS_IDENTITY_POOL_ID` | | Cognito identity pool; gives the mobile app short-lived credentials for its face check |
-   | `MEDIA_S3_BUCKET` | | Optional. Private S3 bucket for photos and face images; unset = local folders |
+   | `AWS_IDENTITY_POOL_ID` | | Cognito identity pool; gives the mobile app and web app short-lived credentials for the face check |
+   | `LIVENESS_MIN_CONFIDENCE` | `90` | Lowest AWS liveness score (0-100) accepted as a live person |
+   | `GEOFENCE_MAX_ACCURACY_METERS` | `100` | Check-in is refused when the phone's GPS is less accurate than this |
+   | `PHONE_LOCK_ENABLED` | `False` | One phone per employee (on hold). `True`: check-in only from the employee's registered phone; a new phone needs the admin's approval |
+   | `MEDIA_STORAGE` | `database` | Where photos and face images are kept (see File storage): `database` or `local` |
+   | `MEDIA_S3_BUCKET` | | Optional. Private S3 bucket for photos and face images; overrides `MEDIA_STORAGE` |
    | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:8081` | Comma-separated: the web app, and the mobile dev server's web preview |
    | `FRONTEND_URL` | `http://localhost:3000` | Links in password-reset emails |
    | `EMAIL_HOST_PASSWORD` | | Resend API key (SMTP), for password-reset emails |
@@ -89,8 +95,8 @@ All under `/api/v1`; the full list is at `/docs` (with `DEBUG=True`).
 | --- | --- |
 | Sign-in | `POST /org/login` (admin), `POST /member/login` then `/member/login/complete` (employee, after the face check), `POST /auth/refresh`, `POST /auth/logout`, `POST /org/signup`, `/forgot-password` and `/reset-password` |
 | Face check | `POST /face/liveness/create`, `POST /face/liveness/credentials` (mobile), `POST /face/liveness/result`, `POST /face/register` |
-| Attendance | `POST /attendance/mark` (employee: GPS and face token), `GET /attendance/history`, `GET /attendance/list` and `POST /attendance/manual` (admin) |
-| Admin | `GET /dashboard/summary`, `GET /geocode/search` (address search, at most one request per second to OpenStreetMap for all users), employees, departments (with `/departments/leaderboard`), designations, shifts, locations, tasks |
+| Attendance | `POST /attendance/mark` (employee: GPS and face token, for check-in and check-out), `GET`/`POST /attendance/presence` (office-area tracking while checked in), `GET /attendance/history`, `GET /attendance/list` and `POST /attendance/manual` (admin) |
+| Admin | `GET /dashboard/summary`, `GET /geocode/search` (address search, at most one request per second to OpenStreetMap for all users), employees (with `POST /employees/{id}/phone/approve` and `DELETE /employees/{id}/phone`), departments (with `/departments/leaderboard`), designations, shifts, locations, tasks |
 | Employee | `GET /employee-details`, `GET /tasks`, `PATCH /tasks/{id}/status` |
 | Public | `GET /app/config` (minimum mobile app version), `GET /employees/{id}/card` (ID card page), `GET /health/db` |
 
@@ -134,7 +140,8 @@ web app. Codes:
 | `conflict` | 409 | E.g. a liveness session already used |
 | `validation_error` | 422 | Request body or query failed validation; `detail` lists each field |
 | `internal_error` | 500 | Unexpected server error; details are logged, never returned |
-| `face_verification_required` | 428 | `/attendance/mark` check-in without a valid `face_token` |
+| `face_verification_required` | 428 | `/attendance/mark` check-in or check-out without a valid `face_token` |
+| `device_not_approved` | 403 | Check-in from a phone that is not the employee's registered phone (only with `PHONE_LOCK_ENABLED`) |
 | `outside_geofence` | 403 | Check-in too far from the office; `detail` has `distance_meters`, `allowed_radius_meters`, `office_location` |
 | `no_open_attendance` | 404 | Check-out with no open check-in |
 | `invalid_location` | 400 | Invalid GPS data or attendance action, or the organisation has no office location |
@@ -149,27 +156,50 @@ already-used refresh token signs that device out (a copied token is
 assumed), so a client must not refresh twice in parallel.
 `POST /auth/logout` with `{"refresh": ...}` signs the device out.
 
+## Attendance rules
+
+- **Check-in** needs a live face check that matches the employee's
+  registered face (`face_token`, valid 5 minutes), a real GPS position (no
+  fake-GPS app, accuracy within `GEOFENCE_MAX_ACCURACY_METERS`) inside the
+  office radius, and, with `PHONE_LOCK_ENABLED`, the employee's registered
+  phone.
+- **Check-out** needs a live face check too. Its location is recorded and
+  flagged inside / outside, never refused. An admin can always check
+  someone in or out by hand (`POST /attendance/manual`).
+- **Office-area tracking.** While checked in, the mobile app watches the
+  office area in the background and reports each time the phone leaves
+  (`exit`) or comes back (`enter`), and whether tracking is `on` or `off`
+  (the employee refused "Allow all the time" location). The admin sees the
+  time spent outside on each day in the attendance history.
+
 ## File storage
 
-Employee photos and enrolled face images are never stored in the database.
+| | `database` (default) | `local` | S3 (`MEDIA_S3_BUCKET` set) |
+| --- | --- | --- | --- |
+| Employee photos | `stored_files` table, served at `/media/...` | `media/`, served at `/media/...` | `s3://<bucket>/media/`, signed URLs valid 1 hour |
+| Face images | `stored_files` table, never served | `private_media/`, never served | `s3://<bucket>/faces/`, never served |
 
-| | Local (no `MEDIA_S3_BUCKET`) | S3 (`MEDIA_S3_BUCKET` set) |
-| --- | --- | --- |
-| Employee photos | `media/`, served at `/media/...` | `s3://<bucket>/media/`, signed URLs valid 1 hour |
-| Face images | `private_media/`, never served | `s3://<bucket>/faces/`, never served |
+`database` keeps files across restarts on hosts that wipe their disk (such
+as Render's free plan). With S3, the bucket must block all public access;
+objects are written with server-side encryption, and the AWS user in `.env`
+needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on
+`arn:aws:s3:::<bucket>/*`, in addition to its Rekognition permissions.
 
-The bucket must block all public access. Objects are written with
-server-side encryption. The AWS user in `.env` needs `s3:PutObject`,
-`s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::<bucket>/*`, in
-addition to its Rekognition permissions.
-
-After switching to S3, or to move face images left in the database by an
-older version, run (from `fastapi_backend/`):
+After changing where files are kept, copy the existing ones over (from
+`fastapi_backend/`):
 
 ```
 python -m scripts.move_files_to_storage --dry-run
 python -m scripts.move_files_to_storage
 ```
+
+## Error tracking
+
+With `SENTRY_DSN` set, unexpected server errors (500s) go to Sentry with
+the failing code line and the deployed commit (`RENDER_GIT_COMMIT`). Request
+bodies (face images, passwords), IP addresses and the signed-in user are
+never sent; tokens and passwords in headers are filtered. Errors only, no
+performance tracing. Set up in `app/core/monitoring.py`.
 
 ## Docker
 
@@ -182,8 +212,8 @@ docker run --rm --env-file .env mukham-api alembic upgrade head
 docker run --env-file .env -p 8002:8002 mukham-api
 ```
 
-Use S3 storage (`MEDIA_S3_BUCKET`) in containers; local `media/` and
-`private_media/` are not copied into the image.
+Keep `MEDIA_STORAGE=database` (the default) or S3 in containers; local
+`media/` and `private_media/` are not copied into the image.
 
 ## Database changes
 
@@ -195,6 +225,19 @@ Do not use `--autogenerate`: it would try to rename them to match the models.
 
 A database created before Django was removed upgrades in place:
 `alembic upgrade head` drops the Django-only tables (`0003_drop_django_tables`).
+
+## Hosting
+
+| What | Where |
+| --- | --- |
+| This API | Render (Docker), https://mukham-fastapi.onrender.com, deploys on every push to `migrate/django-to-fastapi` |
+| Database | Supabase PostgreSQL, Mumbai. Migrations are not run on deploy: run `alembic upgrade head` against Supabase after pushing a new migration |
+| Face checks | AWS Rekognition and a Cognito identity pool, `ap-south-1` |
+| Email | Resend |
+| Push notifications | Expo Push |
+| Errors | Sentry |
+
+Step-by-step setup: `DEPLOYMENT_GUIDE.md` in the parent folder.
 
 ## Sibling repositories
 
